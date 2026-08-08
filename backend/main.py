@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 
+from monitoring.collector import collect_metrics
+
+
 app = FastAPI(
     title="NetGuard AI",
     description="Intelligent Network Monitoring and Self-Healing System",
@@ -21,3 +24,8 @@ def health_check():
     return {
         "status": "healthy"
     }
+
+
+@app.get("/metrics")
+def metrics():
+    return collect_metrics()
