@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  netguard-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: netguard-ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+      - DEFAULT_REFRESH_INTERVAL=5
+    volumes:
+      - netguard_data:/app/database
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  netguard_data:
+    driver: local
