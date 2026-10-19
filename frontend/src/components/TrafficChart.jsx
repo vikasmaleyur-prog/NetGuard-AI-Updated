@@ -91,18 +91,18 @@ export function TrafficChart({ history = [], latestMetrics = null }) {
             aria-label="Network throughput chart"
           >
             {/* Grid lines */}
-            <line x1={padLeft} y1={padTop} x2={width - padRight} y2={padTop} stroke="#17263c" strokeDasharray="3 3" />
-            <line x1={padLeft} y1={padTop + chartH / 2} x2={width - padRight} y2={padTop + chartH / 2} stroke="#17263c" strokeDasharray="3 3" />
-            <line x1={padLeft} y1={padTop + chartH} x2={width - padRight} y2={padTop + chartH} stroke="#1e3450" />
+            <line x1={padLeft} y1={padTop} x2={width - padRight} y2={padTop} stroke="var(--chart-grid, #e5e7eb)" strokeDasharray="3 3" />
+            <line x1={padLeft} y1={padTop + chartH / 2} x2={width - padRight} y2={padTop + chartH / 2} stroke="var(--chart-grid, #e5e7eb)" strokeDasharray="3 3" />
+            <line x1={padLeft} y1={padTop + chartH} x2={width - padRight} y2={padTop + chartH} stroke="var(--chart-grid, #e5e7eb)" />
 
             {/* Y axis labels */}
-            <text x={padLeft - 6} y={padTop + 4} textAnchor="end" className="chart-axis-label">
+            <text x={padLeft - 6} y={padTop + 4} textAnchor="end" fill="var(--chart-axis, #6b7280)" className="chart-axis-label">
               {formatBytesPerSec(maxVal)}
             </text>
-            <text x={padLeft - 6} y={padTop + chartH / 2 + 4} textAnchor="end" className="chart-axis-label">
+            <text x={padLeft - 6} y={padTop + chartH / 2 + 4} textAnchor="end" fill="var(--chart-axis, #6b7280)" className="chart-axis-label">
               {formatBytesPerSec(maxVal / 2)}
             </text>
-            <text x={padLeft - 6} y={padTop + chartH + 4} textAnchor="end" className="chart-axis-label">
+            <text x={padLeft - 6} y={padTop + chartH + 4} textAnchor="end" fill="var(--chart-axis, #6b7280)" className="chart-axis-label">
               0
             </text>
 
@@ -111,8 +111,8 @@ export function TrafficChart({ history = [], latestMetrics = null }) {
               <path
                 d={recvPath}
                 fill="none"
-                stroke="#10b981"
-                strokeWidth="2"
+                stroke="var(--chart-inbound, #16a34a)"
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -123,8 +123,8 @@ export function TrafficChart({ history = [], latestMetrics = null }) {
               <path
                 d={sentPath}
                 fill="none"
-                stroke="#38bdf8"
-                strokeWidth="2"
+                stroke="var(--chart-outbound, #2563eb)"
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -143,6 +143,7 @@ export function TrafficChart({ history = [], latestMetrics = null }) {
                   x={getX(i)}
                   y={height - 6}
                   textAnchor={isFirst ? "start" : isLast ? "end" : "middle"}
+                  fill="var(--chart-axis, #6b7280)"
                   className="chart-axis-label"
                 >
                   {p.timeStr}
@@ -155,11 +156,11 @@ export function TrafficChart({ history = [], latestMetrics = null }) {
 
       <div className="chart-footer-legend">
         <span className="legend-item">
-          <span className="legend-indicator" style={{ backgroundColor: "#10b981" }} />
+          <span className="legend-indicator" style={{ backgroundColor: "var(--chart-inbound, #16a34a)" }} />
           Inbound Traffic (bytes received / sec)
         </span>
         <span className="legend-item">
-          <span className="legend-indicator" style={{ backgroundColor: "#38bdf8" }} />
+          <span className="legend-indicator" style={{ backgroundColor: "var(--chart-outbound, #2563eb)" }} />
           Outbound Traffic (bytes sent / sec)
         </span>
         <span className="legend-note">

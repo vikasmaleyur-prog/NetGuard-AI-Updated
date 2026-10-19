@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Save, RefreshCw, CheckCircle, AlertTriangle, Shield, Sliders, Wifi } from "lucide-react";
+import { Save, RefreshCw, CheckCircle, AlertTriangle, Shield, Sliders, Wifi, Sun, Moon } from "lucide-react";
 import Badge from "../components/Badge";
 import api from "../api/client";
 
@@ -10,6 +10,8 @@ export function SettingsPage({
   setRefreshInterval,
   backendOnline,
   dbBackend = "sqlite",
+  theme = "light",
+  onToggleTheme,
   onRefreshAll,
 }) {
   const [cpuWarning, setCpuWarning] = useState(80);
@@ -134,6 +136,78 @@ export function SettingsPage({
           <span>{feedback.message}</span>
         </div>
       )}
+
+      {/* 0. CONSOLE APPEARANCE & THEME (HUEL UK WHITE / DARK OPS) */}
+      <div className="panel settings-panel mb-4">
+        <div className="panel-header">
+          <div>
+            <h3 className="panel-title">Console Visual Theme</h3>
+            <span className="panel-subtitle">Select between clean Huel-inspired high-contrast white and dark ops console</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge status={theme === "light" ? "healthy" : "info"} label={theme === "light" ? "HUEL WHITE ACTIVE" : "DARK OPS ACTIVE"} />
+          </div>
+        </div>
+        <div className="theme-selector-grid">
+          <div
+            className={`theme-card-option ${theme === "light" ? "selected" : ""}`}
+            onClick={() => onToggleTheme && theme !== "light" && onToggleTheme()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === "Enter" && onToggleTheme && theme !== "light" && onToggleTheme()}
+          >
+            <div className="theme-card-preview theme-preview-huel">
+              <div className="preview-topbar" />
+              <div className="preview-body">
+                <div className="preview-sidebar" />
+                <div className="preview-content">
+                  <div className="preview-card" />
+                  <div className="preview-card" />
+                </div>
+              </div>
+            </div>
+            <div className="theme-card-info">
+              <div className="theme-card-title-row">
+                <Sun size={16} className="text-amber" />
+                <span className="theme-card-name">Huel White (Default)</span>
+                {theme === "light" && <Badge status="healthy" label="CURRENT" />}
+              </div>
+              <p className="theme-card-desc">
+                Clean, minimalist, high-contrast black and white aesthetic inspired by Huel UK. Pure white surfaces, jet-black typography, and razor-sharp borders.
+              </p>
+            </div>
+          </div>
+
+          <div
+            className={`theme-card-option ${theme === "dark" ? "selected" : ""}`}
+            onClick={() => onToggleTheme && theme !== "dark" && onToggleTheme()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === "Enter" && onToggleTheme && theme !== "dark" && onToggleTheme()}
+          >
+            <div className="theme-card-preview theme-preview-dark">
+              <div className="preview-topbar" />
+              <div className="preview-body">
+                <div className="preview-sidebar" />
+                <div className="preview-content">
+                  <div className="preview-card" />
+                  <div className="preview-card" />
+                </div>
+              </div>
+            </div>
+            <div className="theme-card-info">
+              <div className="theme-card-title-row">
+                <Moon size={16} className="text-blue" />
+                <span className="theme-card-name">Dark Operations Console</span>
+                {theme === "dark" && <Badge status="info" label="CURRENT" />}
+              </div>
+              <p className="theme-card-desc">
+                Low-emissivity deep navy and slate colorway designed for darkened security operations centers (SOC) and night telemetry monitoring.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <form onSubmit={handleSaveSettings} className="settings-form-layout">
         {/* 1. MONITORING & POLLING CONFIG */}

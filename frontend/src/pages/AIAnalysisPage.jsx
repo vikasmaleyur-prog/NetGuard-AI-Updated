@@ -236,8 +236,119 @@ export function AIAnalysisPage({
         </div>
       </div>
 
-      {/* 3. STRUCTURED DEVELOPER DIAGNOSTICS VIEW */}
-      <div className="panel diagnostics-panel" style={{ marginTop: "24px" }}>
+      {/* 3. 12-FEATURE TELEMETRY INPUT VECTOR MATRIX */}
+      <div className="panel feature-matrix-panel" style={{ marginTop: "20px" }}>
+        <div className="panel-header">
+          <div>
+            <h3 className="panel-title">Telemetry Feature Vector Matrix</h3>
+            <span className="panel-subtitle">12 real-time continuous dimensions mapped into multi-model anomaly detectors</span>
+          </div>
+          <span className="telemetry-timestamp">Dimension: 12 × 1 Float Tensor</span>
+        </div>
+
+        <div className="table-responsive">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Feature Key</th>
+                <th>Domain</th>
+                <th>Model Coverage</th>
+                <th>Standard Range</th>
+                <th>Weight Impact</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code className="code-text">cpu_usage_percent</code></td>
+                <td>Compute</td>
+                <td>Isolation Forest, LSTM</td>
+                <td>0.0% – 100.0%</td>
+                <td><span className="badge badge-warning">High</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">memory_usage_percent</code></td>
+                <td>RAM</td>
+                <td>Isolation Forest, LSTM</td>
+                <td>0.0% – 100.0%</td>
+                <td><span className="badge badge-warning">High</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">disk_usage_percent</code></td>
+                <td>Storage</td>
+                <td>Isolation Forest, LSTM</td>
+                <td>0.0% – 100.0%</td>
+                <td><span className="badge badge-info">Medium</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">bytes_sent</code></td>
+                <td>Throughput</td>
+                <td>Isolation Forest, RF, LSTM</td>
+                <td>Cumulative Counter</td>
+                <td><span className="badge badge-success">Baseline</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">bytes_received</code></td>
+                <td>Throughput</td>
+                <td>Isolation Forest, RF, LSTM</td>
+                <td>Cumulative Counter</td>
+                <td><span className="badge badge-success">Baseline</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">packets_sent</code></td>
+                <td>Network Flow</td>
+                <td>Isolation Forest, LSTM</td>
+                <td>Cumulative Counter</td>
+                <td><span className="badge badge-info">Medium</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">packets_received</code></td>
+                <td>Network Flow</td>
+                <td>Isolation Forest, LSTM</td>
+                <td>Cumulative Counter</td>
+                <td><span className="badge badge-info">Medium</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">errors_in</code></td>
+                <td>NIC Integrity</td>
+                <td>Isolation Forest, RF</td>
+                <td>Integer Count</td>
+                <td><span className="badge badge-danger">Critical</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">errors_out</code></td>
+                <td>NIC Integrity</td>
+                <td>Isolation Forest, RF</td>
+                <td>Integer Count</td>
+                <td><span className="badge badge-danger">Critical</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">drops_in</code></td>
+                <td>Buffer Saturation</td>
+                <td>Isolation Forest, RF</td>
+                <td>Integer Count</td>
+                <td><span className="badge badge-danger">Critical</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">drops_out</code></td>
+                <td>Buffer Saturation</td>
+                <td>Isolation Forest, RF</td>
+                <td>Integer Count</td>
+                <td><span className="badge badge-danger">Critical</span></td>
+              </tr>
+              <tr>
+                <td><code className="code-text">latency_ms</code></td>
+                <td>Connectivity</td>
+                <td>Isolation Forest, RF, LSTM</td>
+                <td>0.1ms – 500.0ms</td>
+                <td><span className="badge badge-danger">Critical</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 4. STRUCTURED DEVELOPER DIAGNOSTICS VIEW */}
+      <div className="panel diagnostics-panel" style={{ marginTop: "20px" }}>
         <button
           type="button"
           className="diagnostics-toggle-btn"

@@ -10,9 +10,36 @@ _last_sample_time = None
 _last_counters = None
 
 
+def get_active_interfaces():
+    """Retrieve list of active network interfaces with IP addresses and status."""
+    results = []
+    try:
+        stats = psutil.net_if_stats()
+        addrs = psutil.net_if_addrs()
+        for name, stat in stats.items():
+            if not stat.isup:
+                continue
+            ip = "Unassigned"
+            if name in addrs:
+                for a in addrs[name]:
+                    if getattr(a.family, "name", "") == "AF_INET":
+                        ip = a.address
+                        break
+            results.append({
+                "name": name,
+                "status": "UP",
+                "speed_mbps": stat.speed,
+                "mtu": stat.mtu,
+                "ip_address": ip,
+            })
+    except Exception:
+        pass
+    return results[:8]
+
+
 def get_network_metrics():
     """
-    Collect network metrics including cumulative counters and calculated throughput rates.
+    Collect network metrics including cumulative counters, throughput rates, and interfaces.
     """
     global _last_sample_time, _last_counters
 
@@ -53,6 +80,7 @@ def get_network_metrics():
         "bytes_recv_per_sec": bytes_recv_rate,
         "packets_sent_per_sec": packets_sent_rate,
         "packets_recv_per_sec": packets_recv_rate,
+        "interfaces": get_active_interfaces(),
     }
 
 

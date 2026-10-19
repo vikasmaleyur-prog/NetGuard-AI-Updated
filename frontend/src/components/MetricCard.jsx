@@ -8,6 +8,8 @@ export function MetricCard({
   trend,
   trendType = "neutral", // "positive", "negative", "neutral", "danger"
   subtitle,
+  progressPercent,
+  details,
   isLoading = false,
   className = "",
 }) {
@@ -18,6 +20,12 @@ export function MetricCard({
   if (trendType === "positive") trendClass = "trend-positive";
   else if (trendType === "danger") trendClass = "trend-danger";
   else if (trendType === "warning") trendClass = "trend-warning";
+
+  let barClass = "bar-normal";
+  if (progressPercent !== undefined && progressPercent !== null) {
+    if (progressPercent > 90) barClass = "bar-danger";
+    else if (progressPercent > 75) barClass = "bar-warning";
+  }
 
   return (
     <div className={`metric-card ${className}`}>
@@ -40,13 +48,30 @@ export function MetricCard({
         {isLoading ? (
           <div className="skeleton skeleton-value" />
         ) : (
-          <div className="metric-value-wrap">
-            <span className="metric-value-text">{displayValue}</span>
-            {isAvailable && unit && <span className="metric-unit">{unit}</span>}
-            {!isAvailable && (
-              <span className="metric-unavailable-text">UNAVAILABLE</span>
+          <>
+            <div className="metric-value-wrap">
+              <span className="metric-value-text">{displayValue}</span>
+              {isAvailable && unit && <span className="metric-unit">{unit}</span>}
+              {!isAvailable && (
+                <span className="metric-unavailable-text">UNAVAILABLE</span>
+              )}
+            </div>
+
+            {progressPercent !== undefined && progressPercent !== null && !isNaN(progressPercent) && (
+              <div className="metric-progress-track">
+                <div
+                  className={`metric-progress-bar ${barClass}`}
+                  style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                />
+              </div>
             )}
-          </div>
+
+            {details && (
+              <div className="metric-details-text">
+                {details}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

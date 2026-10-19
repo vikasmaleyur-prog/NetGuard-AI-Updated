@@ -183,7 +183,62 @@ export function RealtimeMonitorPage({
         </div>
       </div>
 
-      {/* 4. THROUGHPUT TIME-SERIES */}
+      {/* 4. ACTIVE NETWORK INTERFACES TABLE */}
+      <div className="panel network-interfaces-panel">
+        <div className="panel-header">
+          <div>
+            <h3 className="panel-title">Active Network Interfaces & Sockets</h3>
+            <span className="panel-subtitle">Physical and logical network interface bindings from psutil</span>
+          </div>
+          <span className="telemetry-timestamp">
+            {Array.isArray(m.interfaces) ? `${m.interfaces.length} Interfaces Active` : "Detecting interfaces..."}
+          </span>
+        </div>
+
+        <div className="table-responsive">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Interface</th>
+                <th>Status</th>
+                <th>IPv4 Address</th>
+                <th>MTU Size</th>
+                <th>Speed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.isArray(m.interfaces) && m.interfaces.length > 0 ? (
+                m.interfaces.map((iface) => (
+                  <tr key={iface.name}>
+                    <td>
+                      <strong className="code-text">{iface.name}</strong>
+                    </td>
+                    <td>
+                      <span className="status-badge-inline status-badge-online">
+                        <span className="status-dot-sm" />
+                        {iface.status}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="code-text">{iface.ip_address}</span>
+                    </td>
+                    <td>{iface.mtu} octets</td>
+                    <td>{iface.speed_mbps > 0 ? `${iface.speed_mbps} Mbps` : "Auto-negotiate"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="5" className="table-empty-cell">
+                    Gathering network interface telemetry from kernel...
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 5. THROUGHPUT TIME-SERIES */}
       <TrafficChart history={history} latestMetrics={m} />
     </div>
   );

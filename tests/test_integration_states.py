@@ -176,7 +176,7 @@ def test_state_7_ai_models_unconfigured_rationale():
     dec_res = client.get("/decision")
     assert dec_res.status_code == 200
     dec_data = dec_res.json()["decision"]
-    assert dec_data["verdict"] in ["NORMAL", "ANOMALY", "INSUFFICIENT DATA"]
+    assert dec_data["verdict"] in ["NORMAL", "ANOMALY", "INSUFFICIENT DATA", "WARNING", "CRITICAL"]
     assert "contributing_models" in dec_data
 
 

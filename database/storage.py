@@ -57,6 +57,9 @@ class SQLiteCursor:
 
         def sort_key(doc):
             if key == "_id":
+                ts = _get_nested_val(doc, "metrics.timestamp") or doc.get("_created_at") or doc.get("timestamp")
+                if ts:
+                    return str(ts)
                 return str(doc.get("_id", ""))
             val = _get_nested_val(doc, key)
             if val is None:
@@ -180,7 +183,7 @@ class SQLiteCollection:
     def find(self, query_filter: Optional[dict] = None, projection: Optional[dict] = None) -> SQLiteCursor:
         query_filter = query_filter or {}
         with _lock, self._get_conn() as conn:
-            cur = conn.execute("SELECT id, data FROM monitoring_records ORDER BY created_at ASC")
+            cur = conn.execute("SELECT id, data, created_at FROM monitoring_records ORDER BY created_at ASC")
             rows = cur.fetchall()
 
         matched = []
@@ -188,6 +191,7 @@ class SQLiteCollection:
             try:
                 doc = json.loads(row["data"])
                 doc["_id"] = row["id"]
+                doc["_created_at"] = row["created_at"]
                 if self._matches_filter(doc, query_filter):
                     matched.append(self._project(doc, projection))
             except Exception:

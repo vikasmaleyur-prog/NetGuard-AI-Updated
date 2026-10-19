@@ -44,14 +44,25 @@ export function App() {
   const [aiStatus, setAiStatus] = useState(null);
   const [decision, setDecision] = useState(null);
   const [dbBackend, setDbBackend] = useState("sqlite");
-
-  // Telemetry Connection States
   const [backendOnline, setBackendOnline] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(5);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [isAiProcessing, setIsAiProcessing] = useState(false);
+
+  // Theme State: 'light' (Huel White) by default, or 'dark'
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem("netguard_theme") || "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("netguard_theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  };
 
   // Sync route with browser hash for direct navigation & bookmarks
   useEffect(() => {
@@ -292,6 +303,8 @@ export function App() {
             setRefreshInterval={setRefreshInterval}
             backendOnline={backendOnline}
             dbBackend={dbBackend}
+            theme={theme}
+            onToggleTheme={toggleTheme}
             onRefreshAll={fetchAllData}
           />
         );
@@ -318,7 +331,7 @@ export function App() {
   };
 
   return (
-    <div className={`app-root ${sidebarOpen ? "layout-sidebar-open" : "layout-sidebar-closed"}`}>
+    <div className={`app-root ${sidebarOpen ? "layout-sidebar-open" : "layout-sidebar-closed"} theme-${theme}`} data-theme={theme}>
       <Sidebar
         activePage={activePage}
         onNavigate={navigateTo}
@@ -334,6 +347,8 @@ export function App() {
           backendOnline={backendOnline}
           dbBackend={dbBackend}
           isLoading={isLoading}
+          theme={theme}
+          onToggleTheme={toggleTheme}
           onRefresh={fetchAllData}
         />
 

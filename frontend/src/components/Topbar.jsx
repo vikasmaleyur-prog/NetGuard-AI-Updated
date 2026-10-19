@@ -1,5 +1,5 @@
 import React from "react";
-import { Menu, X, RefreshCw } from "lucide-react";
+import { Menu, X, RefreshCw, Sun, Moon } from "lucide-react";
 
 export function Topbar({
   activePage,
@@ -8,6 +8,8 @@ export function Topbar({
   backendOnline,
   dbBackend = "sqlite",
   isLoading = false,
+  theme = "light",
+  onToggleTheme,
   onRefresh,
 }) {
   const pageDescriptions = {
@@ -57,6 +59,19 @@ export function Topbar({
       </div>
 
       <div className="topbar-right">
+        {onToggleTheme && (
+          <button
+            type="button"
+            className="btn-theme-toggle"
+            onClick={onToggleTheme}
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            title={`Switch to ${theme === "light" ? "Dark Ops" : "Huel White"} theme`}
+          >
+            {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
+            <span className="btn-theme-label">{theme === "light" ? "Dark Mode" : "Huel White"}</span>
+          </button>
+        )}
+
         <button
           type="button"
           className="btn-refresh"
