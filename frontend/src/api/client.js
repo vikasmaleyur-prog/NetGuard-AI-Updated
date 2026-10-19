@@ -88,7 +88,26 @@ class ApiClient {
 
   // Health and System Diagnostics
   async getHealth() {
-    return this.get("/health");
+    let res = await this.get("/health");
+    if ((!res.ok || !res.data || !res.data.database) && this.baseUrl.includes(":8000")) {
+      try {
+        const altUrl = this.baseUrl.replace(":8000", ":8001");
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const altResponse = await fetch(`${altUrl}/health`, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (altResponse.ok) {
+          const altData = await altResponse.json().catch(() => null);
+          if (altData && altData.status === "healthy" && altData.database) {
+            this.setBaseUrl(altUrl);
+            return { ok: true, status: 200, data: altData, error: null };
+          }
+        }
+      } catch {
+        // Fallback probe failed, return original response
+      }
+    }
+    return res;
   }
 
   async getSummary() {
