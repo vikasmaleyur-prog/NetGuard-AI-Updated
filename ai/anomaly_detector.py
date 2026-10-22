@@ -1,9 +1,23 @@
-from datetime import datetime, timezone
+"""
+NetGuard AI - Isolation Forest Anomaly Detection
+Unsupervised anomaly detection across 12 host and network telemetry dimensions.
+Supports persistent model artifacts, configurable anomaly thresholds, and independent inference.
+"""
 
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import joblib
+import numpy as np
 from sklearn.ensemble import IsolationForest
 
 from database.connection import monitoring_collection
-
 
 FEATURES = [
     "cpu_usage_percent",
@@ -20,130 +34,130 @@ FEATURES = [
     "latency_ms",
 ]
 
+MODEL_DIR = Path(__file__).resolve().parent / "models"
+MODEL_PATH = MODEL_DIR / "isolation_forest.joblib"
+DEFAULT_CONTAMINATION = 0.10
+DEFAULT_THRESHOLD = 0.0
 
-def load_monitoring_data():
-    """Load monitoring records from MongoDB."""
-
-    records = list(
-        monitoring_collection.find({}).sort("_id", 1)
-    )
-
-    return records
+_cached_model: Optional[IsolationForest] = None
 
 
-def prepare_features(records):
-    """Convert MongoDB records into ML feature data."""
-
-    data = []
-
-    for record in records:
-        metrics = record.get("metrics", {})
-
-        row = [
-            metrics.get(feature, 0)
-            for feature in FEATURES
-        ]
-
-        data.append(row)
-
-    return data
+def extract_features(record: dict) -> List[float]:
+    """Extract ordered 12-dimensional numerical feature vector from a monitoring record."""
+    metrics = record.get("metrics", {}) if "metrics" in record else record
+    row = []
+    for feat in FEATURES:
+        val = metrics.get(feat, 0.0)
+        if val is None:
+            val = 0.0
+        try:
+            row.append(float(val))
+        except (ValueError, TypeError):
+            row.append(0.0)
+    return row
 
 
-def train_isolation_forest(data):
-    """Train the Isolation Forest model."""
+def train_isolation_forest(
+    records: List[dict],
+    contamination: float = DEFAULT_CONTAMINATION,
+    save_path: Optional[Path] = None
+) -> Tuple[Optional[IsolationForest], str]:
+    """
+    Train Isolation Forest model on historical telemetry records and persist artifact to disk.
+    Requires at least 5 samples.
+    """
+    global _cached_model
+
+    if len(records) < 5:
+        return None, f"Insufficient records for training: {len(records)} provided, minimum 5 required."
+
+    data = [extract_features(r) for r in records]
+    contamination = min(0.25, max(0.02, contamination))
 
     model = IsolationForest(
         n_estimators=100,
-        contamination=0.15,
-        random_state=42
+        contamination=contamination,
+        random_state=42,
     )
-
     model.fit(data)
+    _cached_model = model
 
-    return model
+    target_path = save_path or MODEL_PATH
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, str(target_path))
+    except Exception as err:
+        return model, f"Trained successfully, but artifact persistence failed: {err}"
+
+    return model, f"Trained successfully on {len(data)} records with contamination={contamination}."
 
 
-def detect_anomalies(model, data):
-    """Detect anomalies and calculate anomaly scores."""
+def get_model(records: Optional[List[dict]] = None) -> Tuple[Optional[IsolationForest], str]:
+    """
+    Load persisted model from disk if available, or train from records if available.
+    """
+    global _cached_model
 
-    predictions = model.predict(data)
-    scores = model.decision_function(data)
+    if _cached_model is not None:
+        return _cached_model, "Using in-memory cached model."
 
-    results = []
+    if MODEL_PATH.exists():
+        try:
+            _cached_model = joblib.load(str(MODEL_PATH))
+            return _cached_model, f"Loaded model from {MODEL_PATH.name}."
+        except Exception:
+            pass
 
-    for prediction, score in zip(predictions, scores):
+    if records and len(records) >= 5:
+        return train_isolation_forest(records)
 
-        status = "ANOMALY" if prediction == -1 else "NORMAL"
+    return None, "Model not initialized and insufficient records to fit baseline."
 
-        results.append({
+
+def predict_single(
+    metrics: dict,
+    threshold: float = DEFAULT_THRESHOLD,
+    records: Optional[List[dict]] = None
+) -> Dict[str, Any]:
+    """
+    Execute Isolation Forest inference against a single telemetry reading.
+    Returns score, status ('NORMAL' | 'ANOMALY'), threshold, and explanatory detail.
+    """
+    model, msg = get_model(records)
+    if model is None:
+        return {
+            "status": "INSUFFICIENT DATA",
+            "score": None,
+            "threshold": threshold,
+            "algorithm": "Isolation Forest (Unsupervised)",
+            "detail": msg,
+        }
+
+    features = [extract_features(metrics)]
+    try:
+        score = float(model.decision_function(features)[0])
+        status = "ANOMALY" if score < threshold else "NORMAL"
+        return {
             "status": status,
-            "anomaly_score": round(float(score), 4)
-        })
-
-    return results
-
-
-def save_ai_results(records, results):
-    """Store AI analysis results inside the corresponding MongoDB records."""
-
-    for record, result in zip(records, results):
-
-        monitoring_collection.update_one(
-            {"_id": record["_id"]},
-            {
-                "$set": {
-                    "ai_analysis": {
-                        "algorithm": "Isolation Forest",
-                        "status": result["status"],
-                        "anomaly_score": result["anomaly_score"],
-                        "analyzed_at": datetime.now(timezone.utc)
-                    }
-                }
-            }
-        )
-
-
-def run_anomaly_detection():
-    """Run the complete Isolation Forest pipeline."""
-
-    records = load_monitoring_data()
-
-    if len(records) < 5:
-        raise RuntimeError(
-            "Not enough monitoring records for anomaly detection."
-        )
-
-    data = prepare_features(records)
-
-    model = train_isolation_forest(data)
-
-    results = detect_anomalies(model, data)
-
-    save_ai_results(records, results)
-
-    print("NetGuard AI - Isolation Forest")
-    print("--------------------------------")
-
-    for index, result in enumerate(results, start=1):
-
-        print(
-            f"Record {index}: "
-            f"{result['status']} | "
-            f"Score: {result['anomaly_score']}"
-        )
-
-    print("--------------------------------")
-    print(f"Records analyzed: {len(records)}")
-
-    anomalies = sum(
-        1
-        for result in results
-        if result["status"] == "ANOMALY"
-    )
-
-    print(f"Anomalies detected: {anomalies}")
-    print("AI results saved to MongoDB.")
+            "score": round(score, 4),
+            "threshold": threshold,
+            "algorithm": "Isolation Forest (Unsupervised)",
+            "detail": f"Anomaly score {round(score, 4)} (score < {threshold} denotes anomaly boundary deviation)",
+        }
+    except Exception as err:
+        return {
+            "status": "ERROR",
+            "score": None,
+            "threshold": threshold,
+            "algorithm": "Isolation Forest (Unsupervised)",
+            "detail": f"Inference execution failed: {err}",
+        }
 
 
 if __name__ == "__main__":
-    run_anomaly_detection()
+    recs = list(monitoring_collection.find({}))
+    model, msg = get_model(recs)
+    print(f"Isolation Forest status: {msg}")
+    if recs:
+        res = predict_single(recs[-1].get("metrics", {}), records=recs)
+        print("Inference result:", res)

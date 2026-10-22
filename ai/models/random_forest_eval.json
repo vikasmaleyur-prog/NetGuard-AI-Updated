@@ -1,0 +1,55 @@
+{
+  "model_version": "rf-issue-classifier-v1.2",
+  "evaluated_at": "2026-10-21T17:02:17.961745+00:00",
+  "train_samples": 320,
+  "test_samples": 80,
+  "test_accuracy": 1.0,
+  "test_precision": 1.0,
+  "test_recall": 1.0,
+  "test_f1": 1.0,
+  "confusion_matrix": [
+    [
+      16,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      16,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      16,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      16,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      16
+    ]
+  ],
+  "classes": {
+    "0": "NOMINAL",
+    "1": "HIGH_CPU_LOAD",
+    "2": "MEMORY_EXHAUSTION",
+    "3": "NETWORK_CONGESTION",
+    "4": "TRAFFIC_ANOMALY"
+  },
+  "dataset_notes": "Trained on calibrated multi-class network incident profiles with 80/20 held-out evaluation. Evaluates across CPU saturation, memory depletion, network latency/drops, and traffic anomalies."
+}

@@ -8,7 +8,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -298,7 +298,91 @@ class StorageManager:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recovery_actions (
+                    id TEXT PRIMARY KEY,
+                    action_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    is_simulated INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    executed_at TEXT,
+                    completed_at TEXT,
+                    execution_duration_ms REAL,
+                    operator_email TEXT,
+                    pre_metric_snapshot TEXT,
+                    post_metric_snapshot TEXT,
+                    verification_result TEXT,
+                    error_message TEXT,
+                    logs TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_recovery_actions_created ON recovery_actions(created_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    email TEXT UNIQUE NOT NULL,
+                    full_name TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    organization TEXT,
+                    role TEXT DEFAULT 'operator',
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT,
+                    failed_login_attempts INTEGER DEFAULT 0,
+                    lockout_until TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS revoked_tokens (
+                    token_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    revoked_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at)
+                """
+            )
             conn.commit()
+
+            # Seed default admin operator if empty
+            cur = conn.execute("SELECT COUNT(*) as count FROM users")
+            if cur.fetchone()["count"] == 0:
+                admin_id = "usr-admin-01"
+                admin_email = "admin@netguard.ai"
+                # Bcrypt hash for NetGuardAdmin2026!
+                admin_hash = "$2b$12$tMmqcjDoLDyJGzsKp2gIru7zQ0Mnqs.g67TnsZS6PKIyggVXDRY8G"
+                admin_name = "Admin Operator"
+                admin_org = "NetGuard SecOps"
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO users (id, email, full_name, password_hash, organization, role, created_at, failed_login_attempts)
+                    VALUES (?, ?, ?, ?, ?, 'admin', ?, 0)
+                    """,
+                    (admin_id, admin_email, admin_name, admin_hash, admin_org, now),
+                )
+                conn.commit()
 
             # Seed default devices if empty
             cur = conn.execute("SELECT COUNT(*) as count FROM devices")
@@ -327,6 +411,8 @@ class StorageManager:
                     "memory_warning_threshold": 85.0,
                     "latency_warning_threshold": 100.0,
                     "active_collector": True,
+                    "recovery_mode": "MANUAL",
+                    "recovery_cooldown_seconds": 300,
                 }
                 now = datetime.now(timezone.utc).isoformat()
                 for k, v in defaults.items():
@@ -337,15 +423,51 @@ class StorageManager:
                 conn.commit()
 
     def add_alert(self, severity: str, title: str, message: str, source: str = "System", metadata: Optional[dict] = None) -> str:
-        alert_id = f"alt-{uuid.uuid4().hex[:8]}"
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        meta = dict(metadata or {})
+
         with _lock, self._get_conn() as conn:
+            # Alert deduplication: check for recent active unresolved alert with same title & source
+            cur = conn.execute(
+                """
+                SELECT id, timestamp, metadata FROM alerts
+                WHERE title = ? AND source = ? AND resolved = 0
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (title, source),
+            )
+            existing = cur.fetchone()
+            if existing:
+                try:
+                    ts_str = existing["timestamp"].replace("Z", "+00:00")
+                    exist_dt = datetime.fromisoformat(ts_str)
+                    age_seconds = (now_dt - exist_dt).total_seconds()
+                except Exception:
+                    age_seconds = 9999.0
+
+                if age_seconds < 300:  # 5-minute cooldown deduplication window
+                    exist_id = existing["id"]
+                    exist_meta = json.loads(existing["metadata"] or "{}")
+                    exist_meta["duplicate_count"] = exist_meta.get("duplicate_count", 1) + 1
+                    exist_meta["last_seen_at"] = now_iso
+                    exist_meta.update(meta)
+                    conn.execute(
+                        "UPDATE alerts SET timestamp = ?, message = ?, metadata = ? WHERE id = ?",
+                        (now_iso, message, json.dumps(exist_meta), exist_id),
+                    )
+                    conn.commit()
+                    return exist_id
+
+            alert_id = f"alt-{uuid.uuid4().hex[:8]}"
+            meta["duplicate_count"] = 1
+            meta["first_seen_at"] = now_iso
             conn.execute(
                 """
                 INSERT INTO alerts (id, timestamp, severity, title, message, source, acknowledged, resolved, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
                 """,
-                (alert_id, now, severity.upper(), title, message, source, json.dumps(metadata or {})),
+                (alert_id, now_iso, severity.upper(), title, message, source, json.dumps(meta)),
             )
             conn.commit()
         self.add_log(severity.upper(), source, f"Alert created: [{severity.upper()}] {title} - {message}")
@@ -538,3 +660,305 @@ class StorageManager:
                 "error": str(e),
                 "stats": {},
             }
+
+    # ========================================================
+    # USER AUTHENTICATION & SESSION MANAGEMENT
+    # ========================================================
+
+    def create_user(
+        self,
+        email: str,
+        password_hash: str,
+        full_name: str,
+        organization: Optional[str] = None,
+        role: str = "operator",
+    ) -> Dict[str, Any]:
+        """Create a new user record. Raises ValueError if email is already taken."""
+        user_id = f"usr-{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        normalized_email = email.strip().lower()
+        with _lock, self._get_conn() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO users (id, email, full_name, password_hash, organization, role, created_at, failed_login_attempts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    """,
+                    (user_id, normalized_email, full_name.strip(), password_hash, organization.strip() if organization else None, role, now),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                raise ValueError("An account with this email address already exists.")
+
+        self.add_log("INFO", "Auth", f"User registered: {normalized_email} ({user_id})")
+        return {
+            "id": user_id,
+            "email": normalized_email,
+            "full_name": full_name.strip(),
+            "organization": organization.strip() if organization else None,
+            "role": role,
+            "created_at": now,
+        }
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Retrieve user record including password_hash for authentication."""
+        normalized = email.strip().lower()
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT * FROM users WHERE email = ?", (normalized,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve sanitized user record excluding password_hash."""
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            user_dict = dict(row)
+            user_dict.pop("password_hash", None)
+            return user_dict
+
+    def update_user_login(self, user_id: str) -> None:
+        """Reset failed login attempts and record login timestamp."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock, self._get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE users
+                SET last_login_at = ?, failed_login_attempts = 0, lockout_until = NULL
+                WHERE id = ?
+                """,
+                (now, user_id),
+            )
+            conn.commit()
+
+    def record_failed_login(self, email: str) -> int:
+        """Increment failed login attempts and apply temporary lockout if attempts exceed threshold."""
+        normalized = email.strip().lower()
+        now = datetime.now(timezone.utc)
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT id, failed_login_attempts FROM users WHERE email = ?", (normalized,))
+            row = cur.fetchone()
+            if not row:
+                return 0
+            attempts = (row["failed_login_attempts"] or 0) + 1
+            lockout_until = None
+            if attempts >= 5:
+                # 15 minutes security lockout
+                lockout_until = (now + timedelta(minutes=15)).isoformat()
+            conn.execute(
+                "UPDATE users SET failed_login_attempts = ?, lockout_until = ? WHERE id = ?",
+                (attempts, lockout_until, row["id"]),
+            )
+            conn.commit()
+            return attempts
+
+    def is_user_locked_out(self, email: str) -> bool:
+        """Check if user account is currently under security lockout."""
+        normalized = email.strip().lower()
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT lockout_until FROM users WHERE email = ?", (normalized,))
+            row = cur.fetchone()
+            if not row or not row["lockout_until"]:
+                return False
+            try:
+                lockout = datetime.fromisoformat(row["lockout_until"])
+                if lockout > datetime.now(timezone.utc):
+                    return True
+                # Lockout window has expired - reset counter
+                conn.execute("UPDATE users SET lockout_until = NULL, failed_login_attempts = 0 WHERE email = ?", (normalized,))
+                conn.commit()
+                return False
+            except Exception:
+                return False
+
+    def revoke_token(self, token_id: str, user_id: str, expires_at: str) -> None:
+        """Add JWT jti identifier to the revoked tokens blacklist."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock, self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO revoked_tokens (token_id, user_id, revoked_at, expires_at) VALUES (?, ?, ?, ?)",
+                (token_id, user_id, now, expires_at),
+            )
+            conn.commit()
+
+    def is_token_revoked(self, token_id: str) -> bool:
+        """Check if a JWT jti token identifier has been revoked."""
+        if not token_id:
+            return True
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT 1 FROM revoked_tokens WHERE token_id = ?", (token_id,))
+            return cur.fetchone() is not None
+
+    def clean_expired_revocations(self) -> None:
+        """Periodically purge expired revocation records."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock, self._get_conn() as conn:
+            conn.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (now,))
+            conn.commit()
+
+    # ==========================================================
+    # SELF-HEALING & RECOVERY AUDIT TRAIL
+    # ==========================================================
+
+    def record_recovery_action(
+        self,
+        action_key: str,
+        title: str,
+        description: str,
+        target: str,
+        status: str,
+        mode: str = "MANUAL",
+        is_simulated: bool = False,
+        operator_email: str = "system@netguard.ai",
+        pre_metric_snapshot: Optional[dict] = None,
+        post_metric_snapshot: Optional[dict] = None,
+        verification_result: str = "UNVERIFIED",
+        error_message: Optional[str] = None,
+        logs: Optional[list] = None,
+    ) -> str:
+        """Insert a new self-healing recovery action audit entry."""
+        action_id = f"rec-{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc).isoformat()
+        with _lock, self._get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO recovery_actions (
+                    id, action_key, title, description, target, status, mode,
+                    is_simulated, created_at, executed_at, completed_at,
+                    operator_email, pre_metric_snapshot, post_metric_snapshot,
+                    verification_result, error_message, logs
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    action_id,
+                    action_key,
+                    title,
+                    description,
+                    target,
+                    status,
+                    mode,
+                    1 if is_simulated else 0,
+                    now,
+                    now if status != "PENDING_APPROVAL" else None,
+                    now if status in ["VERIFIED", "FAILED", "DRY_RUN", "SKIPPED"] else None,
+                    operator_email,
+                    json.dumps(pre_metric_snapshot or {}),
+                    json.dumps(post_metric_snapshot or {}),
+                    verification_result,
+                    error_message,
+                    json.dumps(logs or []),
+                ),
+            )
+            conn.commit()
+
+        self.add_log(
+            "INFO" if status != "FAILED" else "WARNING",
+            "RecoveryEngine",
+            f"Recovery action [{status}] {title} on {target} (Mode: {mode})",
+        )
+        return action_id
+
+    def get_recovery_actions(
+        self,
+        limit: int = 50,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve recent recovery action audit entries."""
+        with _lock, self._get_conn() as conn:
+            query = "SELECT * FROM recovery_actions WHERE 1=1"
+            params: List[Any] = []
+            if status:
+                query += " AND status = ?"
+                params.append(status.upper())
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cur = conn.execute(query, params)
+            rows = cur.fetchall()
+
+        actions = []
+        for r in rows:
+            actions.append({
+                "id": r["id"],
+                "action_key": r["action_key"],
+                "title": r["title"],
+                "description": r["description"],
+                "target": r["target"],
+                "status": r["status"],
+                "mode": r["mode"],
+                "is_simulated": bool(r["is_simulated"]),
+                "created_at": r["created_at"],
+                "executed_at": r["executed_at"],
+                "completed_at": r["completed_at"],
+                "execution_duration_ms": r["execution_duration_ms"],
+                "operator_email": r["operator_email"],
+                "pre_metric_snapshot": json.loads(r["pre_metric_snapshot"] or "{}"),
+                "post_metric_snapshot": json.loads(r["post_metric_snapshot"] or "{}"),
+                "verification_result": r["verification_result"],
+                "error_message": r["error_message"],
+                "logs": json.loads(r["logs"] or "[]"),
+            })
+        return actions
+
+    def get_recovery_action_by_id(self, action_id: str) -> Optional[Dict[str, Any]]:
+        """Find a specific recovery action by unique ID."""
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute("SELECT * FROM recovery_actions WHERE id = ?", (action_id,))
+            r = cur.fetchone()
+            if not r:
+                return None
+            return {
+                "id": r["id"],
+                "action_key": r["action_key"],
+                "title": r["title"],
+                "description": r["description"],
+                "target": r["target"],
+                "status": r["status"],
+                "mode": r["mode"],
+                "is_simulated": bool(r["is_simulated"]),
+                "created_at": r["created_at"],
+                "executed_at": r["executed_at"],
+                "completed_at": r["completed_at"],
+                "execution_duration_ms": r["execution_duration_ms"],
+                "operator_email": r["operator_email"],
+                "pre_metric_snapshot": json.loads(r["pre_metric_snapshot"] or "{}"),
+                "post_metric_snapshot": json.loads(r["post_metric_snapshot"] or "{}"),
+                "verification_result": r["verification_result"],
+                "error_message": r["error_message"],
+                "logs": json.loads(r["logs"] or "[]"),
+            }
+
+    def update_recovery_action(self, action_id: str, updates: Dict[str, Any]) -> bool:
+        """Update status, snapshots, or verification results of a recovery action."""
+        if not updates:
+            return False
+
+        allowed_fields = [
+            "status", "mode", "executed_at", "completed_at", "execution_duration_ms",
+            "pre_metric_snapshot", "post_metric_snapshot", "verification_result",
+            "error_message", "logs"
+        ]
+
+        clauses = []
+        params = []
+        for k, v in updates.items():
+            if k in allowed_fields:
+                clauses.append(f"{k} = ?")
+                if isinstance(v, (dict, list)):
+                    params.append(json.dumps(v))
+                else:
+                    params.append(v)
+
+        if not clauses:
+            return False
+
+        params.append(action_id)
+        sql = f"UPDATE recovery_actions SET {', '.join(clauses)} WHERE id = ?"
+
+        with _lock, self._get_conn() as conn:
+            cur = conn.execute(sql, params)
+            conn.commit()
+            return cur.rowcount > 0

@@ -20,6 +20,14 @@ from ai.service import extract_feature_vector, run_full_inference, FEATURES
 
 client = TestClient(app)
 
+# Authenticate test client using seeded administrator
+_auth_res = client.post(
+    "/auth/login",
+    json={"email": "admin@netguard.ai", "password": "NetGuardAdmin2026!"},
+)
+if _auth_res.status_code == 200:
+    client.headers["Authorization"] = f"Bearer {_auth_res.json()['token']}"
+
 
 # -------------------------------------------------------------------------
 # State 1: Backend running + DB connected

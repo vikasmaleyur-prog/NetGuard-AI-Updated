@@ -3,6 +3,8 @@ import { Server, Plus, Trash2, RefreshCw, ShieldCheck } from "lucide-react";
 import Badge from "../components/Badge";
 import Modal from "../components/Modal";
 import EmptyState from "../components/EmptyState";
+import MagneticButton from "../components/MagneticButton";
+import ScrollReveal from "../components/ScrollReveal";
 
 export function DevicesPage({
   devices = [],
@@ -43,27 +45,30 @@ export function DevicesPage({
   return (
     <div className="page-container devices-page">
       {/* 1. ARCHITECTURE NOTICE */}
-      <div className="callout-card callout-info">
-        <div className="callout-icon" aria-hidden="true">
-          <ShieldCheck size={20} />
+      <ScrollReveal direction="fade" delay={0}>
+        <div className="callout-card callout-info">
+          <div className="callout-icon" aria-hidden="true">
+            <ShieldCheck size={20} />
+          </div>
+          <div className="callout-content">
+            <h4 className="callout-title">Monitoring Architecture Note</h4>
+            <p className="callout-text">
+              NetGuard AI executes primary system telemetry collection (CPU, Memory, Disk, NIC counters) directly on the local host machine. Registered external devices represent network targets continuously probed for latency, reachability, and network path health.
+            </p>
+          </div>
         </div>
-        <div className="callout-content">
-          <h4 className="callout-title">Monitoring Architecture Note</h4>
-          <p className="callout-text">
-            NetGuard AI executes primary system telemetry collection (CPU, Memory, Disk, NIC counters) directly on the local host machine. Registered external devices represent network targets continuously probed for latency, reachability, and network path health.
-          </p>
-        </div>
-      </div>
+      </ScrollReveal>
 
       {/* 2. DEVICE INVENTORY PANEL */}
-      <div className="panel devices-panel" style={{ marginTop: "20px" }}>
+      <ScrollReveal direction="up" delay={80}>
+        <div className="panel devices-panel" style={{ marginTop: "20px" }}>
         <div className="panel-header">
           <div>
             <h3 className="panel-title">Monitored Endpoints & Infrastructure</h3>
             <span className="panel-subtitle">Total targets registered: {devices.length}</span>
           </div>
 
-          <button
+          <MagneticButton
             type="button"
             className="btn btn-primary btn-sm"
             onClick={() => setIsModalOpen(true)}
@@ -71,7 +76,7 @@ export function DevicesPage({
           >
             <Plus size={14} />
             Add Target
-          </button>
+          </MagneticButton>
         </div>
 
         <div className="table-responsive">
@@ -164,6 +169,7 @@ export function DevicesPage({
           )}
         </div>
       </div>
+    </ScrollReveal>
 
       {/* ADD TARGET MODAL */}
       <Modal

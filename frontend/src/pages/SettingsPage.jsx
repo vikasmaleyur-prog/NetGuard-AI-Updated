@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Save, RefreshCw, CheckCircle, AlertTriangle, Shield, Sliders, Wifi, Sun, Moon } from "lucide-react";
+import { Save, RefreshCw, CheckCircle, AlertTriangle, Shield, Sliders, Wifi, Sun, Moon, Wrench } from "lucide-react";
 import Badge from "../components/Badge";
 import api from "../api/client";
 
@@ -19,6 +19,8 @@ export function SettingsPage({
   const [memWarning, setMemWarning] = useState(85);
   const [latencyWarning, setLatencyWarning] = useState(100);
   const [activeCollector, setActiveCollector] = useState(true);
+  const [recoveryMode, setRecoveryMode] = useState("MANUAL");
+  const [recoveryCooldown, setRecoveryCooldown] = useState(300);
 
   const [testEndpoint, setTestEndpoint] = useState(api.baseUrl);
   const [testResult, setTestResult] = useState(null);
@@ -42,6 +44,8 @@ export function SettingsPage({
           if (s.memory_warning_threshold !== undefined) setMemWarning(s.memory_warning_threshold);
           if (s.latency_warning_threshold !== undefined) setLatencyWarning(s.latency_warning_threshold);
           if (s.active_collector !== undefined) setActiveCollector(s.active_collector);
+          if (s.recovery_mode !== undefined) setRecoveryMode(s.recovery_mode);
+          if (s.recovery_cooldown_seconds !== undefined) setRecoveryCooldown(s.recovery_cooldown_seconds);
         }
       } catch {
         // Fallback to defaults
@@ -73,6 +77,8 @@ export function SettingsPage({
         memory_warning_threshold: Number(memWarning),
         latency_warning_threshold: Number(latencyWarning),
         active_collector: activeCollector,
+        recovery_mode: recoveryMode,
+        recovery_cooldown_seconds: Number(recoveryCooldown),
       });
 
       if (res.ok) {
@@ -381,7 +387,61 @@ export function SettingsPage({
           </div>
         </div>
 
-        {/* 3. BACKEND CONNECTIVITY & ENDPOINT TESTING */}
+        {/* 3. SELF-HEALING & AUTOMATED REMEDIATION */}
+        <div className="panel settings-panel">
+          <div className="panel-header">
+            <div>
+              <h3 className="panel-title">Self-Healing & Remediation Controls</h3>
+              <span className="panel-subtitle">Configure automated recovery action dispatch and safety policies</span>
+            </div>
+            <Wrench size={18} className="text-blue" />
+          </div>
+
+          <div className="settings-group-stack">
+            {/* Recovery Mode */}
+            <div className="setting-control-row">
+              <div className="setting-label-col">
+                <label htmlFor="recovery-mode-select" className="setting-title">Remediation Policy Mode</label>
+                <span className="setting-desc">Determines whether recovery actions require operator authorization</span>
+              </div>
+              <div className="setting-input-col">
+                <select
+                  id="recovery-mode-select"
+                  value={recoveryMode}
+                  onChange={(e) => setRecoveryMode(e.target.value)}
+                  className="form-select setting-input-control"
+                >
+                  <option value="MANUAL">Manual Approval Required (Recommended for Production)</option>
+                  <option value="AUTOMATIC">Fully Autonomous Remediation (Auto-dispatch on Anomaly)</option>
+                  <option value="DRY_RUN">Dry-Run Simulation Mode (Audit & Verify Without OS Impact)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Recovery Cooldown */}
+            <div className="setting-control-row">
+              <div className="setting-label-col">
+                <label htmlFor="recovery-cooldown-input" className="setting-title">Action Cooldown Window (Seconds)</label>
+                <span className="setting-desc">Minimum interval before identical recovery action can be re-executed</span>
+              </div>
+              <div className="setting-input-col">
+                <input
+                  id="recovery-cooldown-input"
+                  type="number"
+                  min={10}
+                  max={3600}
+                  step={10}
+                  value={recoveryCooldown}
+                  onChange={(e) => setRecoveryCooldown(Number(e.target.value))}
+                  className="form-input setting-input-number"
+                />
+                <span className="input-unit-label">sec</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 4. BACKEND CONNECTIVITY & ENDPOINT TESTING */}
         <div className="panel settings-panel">
           <div className="panel-header">
             <div>

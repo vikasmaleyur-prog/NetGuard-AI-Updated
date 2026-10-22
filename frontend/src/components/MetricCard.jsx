@@ -1,4 +1,6 @@
 import React from "react";
+import useTilt from "../hooks/useTilt";
+import AnimatedCounter from "./AnimatedCounter";
 
 export function MetricCard({
   icon,
@@ -6,15 +8,18 @@ export function MetricCard({
   value,
   unit = "",
   trend,
-  trendType = "neutral", // "positive", "negative", "neutral", "danger"
+  trendType = "neutral", // "positive", "negative", "neutral", "danger", "warning"
   subtitle,
   progressPercent,
   details,
   isLoading = false,
   className = "",
 }) {
+  const cardRef = useTilt({ maxTilt: 5, perspective: 850, scale: 1.018, glow: true });
+
+  const isNumeric = value !== null && value !== undefined && !isNaN(Number(value)) && value !== "";
   const isAvailable = value !== null && value !== undefined && value !== "";
-  const displayValue = isAvailable ? value : "--";
+  const numericVal = isNumeric ? Number(value) : null;
 
   let trendClass = "trend-neutral";
   if (trendType === "positive") trendClass = "trend-positive";
@@ -28,7 +33,13 @@ export function MetricCard({
   }
 
   return (
-    <div className={`metric-card ${className}`}>
+    <div
+      ref={cardRef}
+      className={`metric-card interactive-card ${className}`}
+    >
+      {/* Dynamic Cursor Spotlight Radial Overlay */}
+      <div className="card-spotlight-layer" aria-hidden="true" />
+
       <div className="metric-header">
         <div className="metric-icon-wrap" aria-hidden="true">
           {icon}
@@ -50,7 +61,14 @@ export function MetricCard({
         ) : (
           <>
             <div className="metric-value-wrap">
-              <span className="metric-value-text">{displayValue}</span>
+              {isNumeric ? (
+                <span className="metric-value-text">
+                  <AnimatedCounter value={numericVal} decimals={1} />
+                </span>
+              ) : (
+                <span className="metric-value-text">{isAvailable ? value : "--"}</span>
+              )}
+
               {isAvailable && unit && <span className="metric-unit">{unit}</span>}
               {!isAvailable && (
                 <span className="metric-unavailable-text">UNAVAILABLE</span>

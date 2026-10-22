@@ -22,18 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY requirements.txt* ./
-RUN pip install --no-cache-dir \
-    fastapi==0.115.6 \
-    uvicorn==0.34.0 \
-    psutil==6.1.1 \
-    ping3==4.0.8 \
-    scikit-learn==1.6.0 \
-    numpy==2.2.1 \
-    pymongo==4.10.1 \
-    certifi==2024.12.14 \
-    python-dotenv==1.0.1 \
-    httpx==0.28.1
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Backend, AI, Database, and Monitoring modules
 COPY backend/ ./backend/

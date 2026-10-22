@@ -3,7 +3,7 @@
  * Configurable via VITE_API_BASE_URL with timeout handling, exponential backoff, and error parsing.
  */
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
+const DEFAULT_BASE_URL = "http://127.0.0.1:8001";
 
 export const API_BASE_URL =
   (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL)
@@ -14,10 +14,49 @@ class ApiClient {
   constructor(baseUrl = API_BASE_URL) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.timeoutMs = 8000;
+    this.token =
+      typeof window !== "undefined"
+        ? localStorage.getItem("netguard_token") || sessionStorage.getItem("netguard_token")
+        : null;
+    this.onUnauthorizedCallback = null;
   }
 
   setBaseUrl(url) {
     this.baseUrl = url.replace(/\/+$/, "");
+  }
+
+  setToken(token, remember = true) {
+    this.token = token;
+    if (typeof window !== "undefined") {
+      if (token) {
+        if (remember) {
+          localStorage.setItem("netguard_token", token);
+          sessionStorage.removeItem("netguard_token");
+        } else {
+          sessionStorage.setItem("netguard_token", token);
+          localStorage.removeItem("netguard_token");
+        }
+      } else {
+        localStorage.removeItem("netguard_token");
+        sessionStorage.removeItem("netguard_token");
+      }
+    }
+  }
+
+  getToken() {
+    if (!this.token && typeof window !== "undefined") {
+      this.token =
+        localStorage.getItem("netguard_token") || sessionStorage.getItem("netguard_token");
+    }
+    return this.token;
+  }
+
+  clearToken() {
+    this.setToken(null);
+  }
+
+  onUnauthorized(cb) {
+    this.onUnauthorizedCallback = cb;
   }
 
   async request(endpoint, options = {}) {
@@ -27,9 +66,11 @@ class ApiClient {
       ? setTimeout(() => controller.abort(), this.timeoutMs)
       : null;
 
+    const authToken = this.getToken();
     const headers = {
       "Accept": "application/json",
       ...(options.body && !(options.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
+      ...(authToken ? { "Authorization": `Bearer ${authToken}` } : {}),
       ...(options.headers || {}),
     };
 
@@ -52,6 +93,18 @@ class ApiClient {
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
+        // Trigger session expiration callback on 401 (excluding login attempts)
+        if (
+          response.status === 401 &&
+          !endpoint.includes("/auth/login") &&
+          !endpoint.includes("/auth/register")
+        ) {
+          this.clearToken();
+          if (this.onUnauthorizedCallback) {
+            this.onUnauthorizedCallback();
+          }
+        }
+
         const errorMsg = (data && data.detail) || response.statusText || "Request failed";
         return { ok: false, status: response.status, error: errorMsg, data: null };
       }
@@ -191,7 +244,66 @@ class ApiClient {
   async updateSettings(settings) {
     return this.post("/settings", settings);
   }
+
+  // ==========================================================
+  // SELF-HEALING & RECOVERY
+  // ==========================================================
+
+  async getRecoveryActions() {
+    return this.get("/recovery/actions");
+  }
+
+  async getRecoveryHistory(limit = 50) {
+    return this.get(`/recovery/history?limit=${limit}`);
+  }
+
+  async getRecoveryStatus() {
+    return this.get("/recovery/status");
+  }
+
+  async triggerRecoveryAction(actionKey, mode = "DRY_RUN") {
+    return this.post("/recovery/trigger", { action_key: actionKey, mode });
+  }
+
+  async approveRecoveryAction(actionId) {
+    return this.post(`/recovery/approve/${actionId}`);
+  }
+
+  // ==========================================================
+  // AUTHENTICATION & SESSION MANAGEMENT
+  // ==========================================================
+
+  async login({ email, password, remember_me = false }) {
+    const res = await this.post("/auth/login", { email, password, remember_me });
+    if (res.ok && res.data && res.data.token) {
+      this.setToken(res.data.token, remember_me);
+    }
+    return res;
+  }
+
+  async register(registrationData) {
+    const res = await this.post("/auth/register", registrationData);
+    if (res.ok && res.data && res.data.token) {
+      this.setToken(res.data.token, false);
+    }
+    return res;
+  }
+
+  async logout() {
+    const res = await this.post("/auth/logout");
+    this.clearToken();
+    return res;
+  }
+
+  async getCurrentUser() {
+    return this.get("/auth/me");
+  }
+
+  async forgotPassword(email) {
+    return this.post("/auth/forgot-password", { email });
+  }
 }
+
 
 export const api = new ApiClient();
 export default api;

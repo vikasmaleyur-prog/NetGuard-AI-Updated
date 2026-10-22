@@ -13,6 +13,9 @@ services:
       - APP_ENV=production
       - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
       - DEFAULT_REFRESH_INTERVAL=5
+      - JWT_SECRET=${JWT_SECRET:-netguard-production-secret-change-me-in-env}
+      - RECOVERY_MODE=${RECOVERY_MODE:-MANUAL}
+      - RECOVERY_COOLDOWN_SECONDS=${RECOVERY_COOLDOWN_SECONDS:-300}
     volumes:
       - netguard_data:/app/database
     healthcheck:

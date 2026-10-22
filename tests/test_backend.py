@@ -16,6 +16,14 @@ from ai.service import extract_feature_vector, run_full_inference
 
 client = TestClient(app)
 
+# Authenticate test client using seeded administrator
+_auth_res = client.post(
+    "/auth/login",
+    json={"email": "admin@netguard.ai", "password": "NetGuardAdmin2026!"},
+)
+if _auth_res.status_code == 200:
+    client.headers["Authorization"] = f"Bearer {_auth_res.json()['token']}"
+
 
 def test_root():
     response = client.get("/")
@@ -155,6 +163,40 @@ def test_settings():
     client.post("/settings", json={"refresh_interval": 5})
 
 
+def test_recovery_endpoints():
+    """Verify recovery action catalog, status, history, and trigger endpoints."""
+    # List available actions
+    act_res = client.get("/recovery/actions")
+    assert act_res.status_code == 200
+    act_data = act_res.json()
+    assert "actions" in act_data
+    assert len(act_data["actions"]) >= 4
+
+    # Status
+    stat_res = client.get("/recovery/status")
+    assert stat_res.status_code == 200
+    stat_data = stat_res.json()
+    assert "configured_mode" in stat_data
+    assert "statistics" in stat_data
+
+    # Trigger dry-run
+    trig_res = client.post(
+        "/recovery/trigger",
+        json={"action_key": "flush_dns_cache", "mode": "DRY_RUN"},
+    )
+    assert trig_res.status_code == 200
+    trig_data = trig_res.json()
+    assert trig_data["status"] == "DRY_RUN"
+    assert "action_id" in trig_data
+
+    # History
+    hist_res = client.get("/recovery/history?limit=10")
+    assert hist_res.status_code == 200
+    hist_data = hist_res.json()
+    assert "actions" in hist_data
+    assert any(a["id"] == trig_data["action_id"] for a in hist_data["actions"])
+
+
 if __name__ == "__main__":
     test_root()
     test_health()
@@ -165,4 +207,5 @@ if __name__ == "__main__":
     test_devices()
     test_reports()
     test_settings()
+    test_recovery_endpoints()
     print("All backend tests passed successfully!")

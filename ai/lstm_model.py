@@ -1,11 +1,25 @@
+"""
+NetGuard AI - Time-Series Sequence Analysis & Prediction
+Analyzes temporal telemetry sequences across 10-frame sliding windows.
+Computes 1-step-ahead forecasts, compares observed vs forecasted values,
+and flags significant prediction deviations.
+
+Supports native Keras .keras model when TensorFlow runtime is installed,
+or provides transparent standby reporting with explainable time-series sequence forecasting.
+"""
+
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import joblib
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-
-from database.connection import monitoring_collection
-
 
 FEATURES = [
     "cpu_usage_percent",
@@ -23,146 +37,181 @@ FEATURES = [
 ]
 
 SEQUENCE_LENGTH = 10
+PREDICTION_HORIZON = "1 frame (5-10s)"
+DEVIATION_THRESHOLD = 0.25
+
+MODEL_DIR = Path(__file__).resolve().parent / "models"
+KERAS_PATH = Path(__file__).resolve().parent / "netguard_lstm.keras"
+SCALER_PATH = MODEL_DIR / "lstm_scaler.joblib"
+
+_cached_tf_model = None
+_cached_scaler: Optional[MinMaxScaler] = None
 
 
-def load_timestamped_data():
-    """Load timestamped monitoring records chronologically."""
-
-    records = list(
-        monitoring_collection.find(
-            {"metrics.timestamp": {"$exists": True}}
-        ).sort("metrics.timestamp", 1)
-    )
-
-    return records
+def is_tensorflow_available() -> Tuple[bool, str]:
+    """Check whether TensorFlow/Keras runtime can be imported."""
+    try:
+        import tensorflow as tf  # noqa: F401
+        return True, "TensorFlow runtime available"
+    except ImportError:
+        return False, "TensorFlow runtime not installed in environment (Python 3.13)"
 
 
-def prepare_data(records):
-    """Convert MongoDB metrics into numerical data."""
+def get_or_fit_scaler(data: Optional[np.ndarray] = None) -> MinMaxScaler:
+    """Retrieve persisted feature scaler or fit a new MinMaxScaler."""
+    global _cached_scaler
 
-    data = []
+    if _cached_scaler is not None:
+        return _cached_scaler
 
-    for record in records:
-        metrics = record.get("metrics", {})
+    if SCALER_PATH.exists():
+        try:
+            _cached_scaler = joblib.load(str(SCALER_PATH))
+            return _cached_scaler
+        except Exception:
+            pass
 
-        row = [
-            float(metrics.get(feature, 0))
-            for feature in FEATURES
-        ]
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    if data is not None and len(data) > 0:
+        scaler.fit(data)
+        try:
+            SCALER_PATH.parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(scaler, str(SCALER_PATH))
+        except Exception:
+            pass
 
-        data.append(row)
+    _cached_scaler = scaler
+    return scaler
 
-    return np.array(data, dtype=np.float32)
+
+def extract_feature_vector(record: dict) -> List[float]:
+    """Extract ordered 12-dimensional numerical feature vector."""
+    metrics = record.get("metrics", {}) if "metrics" in record else record
+    row = []
+    for feat in FEATURES:
+        val = metrics.get(feat, 0.0)
+        if val is None:
+            val = 0.0
+        try:
+            row.append(float(val))
+        except (ValueError, TypeError):
+            row.append(0.0)
+    return row
 
 
-def create_sequences(data):
-    """Create sliding windows for LSTM."""
+def evaluate_sequence(records: List[dict]) -> Dict[str, Any]:
+    """
+    Perform sequence evaluation and forecast deviation assessment over historical records.
+    Requires at least SEQUENCE_LENGTH records.
+    """
+    if len(records) < SEQUENCE_LENGTH:
+        return {
+            "status": "INSUFFICIENT DATA",
+            "sequence_length": len(records),
+            "required_length": SEQUENCE_LENGTH,
+            "prediction_horizon": PREDICTION_HORIZON,
+            "algorithm": "LSTM / Temporal Sequence Predictor",
+            "detail": f"Need at least {SEQUENCE_LENGTH} historical telemetry frames ({len(records)} available)",
+        }
 
-    sequences = []
+    # Extract ordered historical sequence
+    recent_records = records[-SEQUENCE_LENGTH:]
+    raw_sequence = np.array([extract_feature_vector(r) for r in recent_records], dtype=np.float32)
 
-    for i in range(len(data) - SEQUENCE_LENGTH + 1):
-        sequences.append(
-            data[i:i + SEQUENCE_LENGTH]
+    scaler = get_or_fit_scaler(raw_sequence)
+    try:
+        scaled_seq = scaler.transform(raw_sequence)
+    except Exception:
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_seq = scaler.fit_transform(raw_sequence)
+        try:
+            joblib.dump(scaler, str(SCALER_PATH))
+        except Exception:
+            pass
+
+    tf_available, tf_msg = is_tensorflow_available()
+    forecasted_vector = None
+    engine_name = "Exponential Moving Sequence Forecaster"
+
+    if tf_available and KERAS_PATH.exists():
+        global _cached_tf_model
+        try:
+            import tensorflow as tf
+            if _cached_tf_model is None:
+                _cached_tf_model = tf.keras.models.load_model(str(KERAS_PATH))
+            input_batch = np.expand_dims(scaled_seq, axis=0)
+            pred_scaled = _cached_tf_model.predict(input_batch, verbose=0)[0]
+            forecasted_vector = scaler.inverse_transform(np.expand_dims(pred_scaled, axis=0))[0]
+            engine_name = "LSTM Neural Network (.keras)"
+        except Exception as err:
+            forecasted_vector = None
+            engine_name = f"LSTM (.keras error: {err})"
+
+    if forecasted_vector is None:
+        # Fallback sequence forecasting: Exponential Weighted Moving Average with trend velocity
+        # Provides honest time-series forecasting when deep learning runtime is absent
+        weights = np.exp(np.linspace(-1.0, 0.0, SEQUENCE_LENGTH))
+        weights /= weights.sum()
+        ewma = np.sum(raw_sequence * weights[:, np.newaxis], axis=0)
+        # Momentum / velocity
+        velocity = (raw_sequence[-1] - raw_sequence[0]) / float(SEQUENCE_LENGTH - 1)
+        forecasted_vector = np.maximum(0.0, ewma + 0.5 * velocity)
+
+    # Compare forecasted next step with the most recent observed reading
+    latest_observed = raw_sequence[-1]
+    # Compute normalized residual deviation across key dimensions (CPU, RAM, Latency)
+    # CPU index 0, RAM index 1, Latency index 11
+    key_indices = [0, 1, 11]
+    deviations = []
+    for idx in key_indices:
+        obs = latest_observed[idx]
+        pred = forecasted_vector[idx]
+        denom = max(1.0, abs(obs) + abs(pred))
+        deviations.append(abs(obs - pred) / denom)
+
+    mean_deviation = float(np.mean(deviations))
+    is_anomaly = mean_deviation >= DEVIATION_THRESHOLD
+
+    if not tf_available:
+        status = "STANDBY"
+        detail = (
+            f"Keras model standby ({tf_msg}); secondary trend deviation score: {mean_deviation:.4f} "
+            f"(threshold {DEVIATION_THRESHOLD})"
+        )
+    else:
+        status = "ANOMALY" if is_anomaly else "NORMAL"
+        detail = (
+            f"Significant trajectory deviation ({mean_deviation:.3f} >= {DEVIATION_THRESHOLD}) in time-series telemetry"
+            if is_anomaly
+            else f"Telemetry conforms to sequence trajectory ({mean_deviation:.3f} < {DEVIATION_THRESHOLD})"
         )
 
-    return np.array(sequences, dtype=np.float32)
-
-
-def build_lstm_model(input_shape):
-    """Build the LSTM neural network."""
-
-    model = Sequential([
-        Input(shape=input_shape),
-
-        LSTM(
-            64,
-            return_sequences=True
-        ),
-
-        Dropout(0.2),
-
-        LSTM(32),
-
-        Dropout(0.2),
-
-        Dense(16, activation="relu"),
-
-        Dense(len(FEATURES))
-    ])
-
-    model.compile(
-        optimizer="adam",
-        loss="mse"
-    )
-
-    return model
-
-
-def main():
-
-    print("NetGuard AI - LSTM Model")
-    print("------------------------")
-
-    records = load_timestamped_data()
-
-    print(f"Timestamped records: {len(records)}")
-
-    if len(records) < SEQUENCE_LENGTH + 1:
-        print("Not enough data for LSTM training.")
-        return
-
-    raw_data = prepare_data(records)
-
-    print(f"Features per timestep: {len(FEATURES)}")
-
-    # Normalize all features to approximately 0-1
-    scaler = MinMaxScaler()
-
-    scaled_data = scaler.fit_transform(raw_data)
-
-    sequences = create_sequences(scaled_data)
-
-    print(f"Sequence length: {SEQUENCE_LENGTH}")
-    print(f"Sequences created: {len(sequences)}")
-
-    # First 9 timesteps → predict 10th timestep
-    X = sequences[:, :-1, :]
-    y = sequences[:, -1, :]
-
-    print(f"Training input shape: {X.shape}")
-    print(f"Training target shape: {y.shape}")
-
-    model = build_lstm_model(
-        input_shape=(X.shape[1], X.shape[2])
-    )
-
-    print("\nModel architecture:")
-    model.summary()
-
-    print("\nTraining LSTM...")
-
-    history = model.fit(
-        X,
-        y,
-        epochs=30,
-        batch_size=8,
-        validation_split=0.2,
-        shuffle=False,
-        verbose=1
-    )
-
-    model.save("ai/netguard_lstm.keras")
-
-    print("\n--------------------------------")
-    print("LSTM training completed.")
-    print("Final training loss:",
-          round(float(history.history["loss"][-1]), 6))
-
-    print("Final validation loss:",
-          round(float(history.history["val_loss"][-1]), 6))
-
-    print("Model saved to: ai/netguard_lstm.keras")
+    return {
+        "status": status,
+        "is_anomaly": is_anomaly,
+        "deviation_score": round(mean_deviation, 4),
+        "deviation_threshold": DEVIATION_THRESHOLD,
+        "prediction_horizon": PREDICTION_HORIZON,
+        "forecast_sample": {
+            "predicted_cpu_percent": round(float(forecasted_vector[0]), 1),
+            "predicted_memory_percent": round(float(forecasted_vector[1]), 1),
+            "predicted_latency_ms": round(float(forecasted_vector[11]), 1),
+        },
+        "observed_sample": {
+            "observed_cpu_percent": round(float(latest_observed[0]), 1),
+            "observed_memory_percent": round(float(latest_observed[1]), 1),
+            "observed_latency_ms": round(float(latest_observed[11]), 1),
+        },
+        "algorithm": engine_name,
+        "sequence_frames": SEQUENCE_LENGTH,
+        "detail": detail,
+    }
 
 
 if __name__ == "__main__":
-    main()
+    from database.connection import monitoring_collection
+    recs = list(monitoring_collection.find({}))
+    res = evaluate_sequence(recs)
+    print("Sequence evaluation result:")
+    for k, v in res.items():
+        print(f"  {k}: {v}")

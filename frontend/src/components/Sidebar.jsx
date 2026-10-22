@@ -11,7 +11,17 @@ import {
   ShieldCheck,
   FileText,
   Shield,
+  LogOut,
 } from "lucide-react";
+
+function getInitials(name) {
+  if (!name) return "OP";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
 
 const NAV_ITEMS = [
   { id: "Dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -34,6 +44,8 @@ export function Sidebar({
   onNavigate,
   isOpen = true,
   unreadAlertsCount = 0,
+  user = null,
+  onLogout = null,
 }) {
   return (
     <aside
@@ -108,14 +120,29 @@ export function Sidebar({
 
       <div className="sidebar-footer-box">
         <div className="operator-profile">
-          <div className="operator-avatar" aria-hidden="true">
-            OP
+          <div className="operator-avatar" aria-hidden="true" title={user?.full_name || "Operator"}>
+            {getInitials(user?.full_name)}
           </div>
           {isOpen && (
             <div className="operator-info">
-              <span className="operator-name">SecOps Console</span>
-              <span className="operator-role">Local Administrator</span>
+              <span className="operator-name" title={user?.full_name || "Operator"}>
+                {user?.full_name || "SecOps Console"}
+              </span>
+              <span className="operator-role" title={user?.email || "Local Administrator"}>
+                {user?.organization || (user?.role === "admin" ? "System Administrator" : "Security Operator")}
+              </span>
             </div>
+          )}
+          {isOpen && onLogout && (
+            <button
+              type="button"
+              className="btn-icon btn-logout"
+              onClick={onLogout}
+              aria-label="Sign out"
+              title="Sign out of console"
+            >
+              <LogOut size={16} />
+            </button>
           )}
         </div>
       </div>

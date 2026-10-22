@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { Shield, ArrowLeft, Sun, Moon } from "lucide-react";
 import api from "./api/client";
 import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
@@ -15,9 +16,13 @@ import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
 import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
 import TermsPage from "./pages/TermsPage";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
 
 function parseHashRoute() {
   const hash = window.location.hash.replace(/^#\/?/, "").toLowerCase();
+  if (hash === "login" || hash === "signin") return "Login";
+  if (hash === "register" || hash === "signup") return "Register";
   if (hash === "privacy" || hash === "privacypolicy") return "Privacy";
   if (hash === "terms" || hash === "termsofservice") return "Terms";
   if (hash === "monitor" || hash === "realtime" || hash === "realtimemonitor") return "Real-time Monitor";
@@ -34,7 +39,11 @@ export function App() {
   const [activePage, setActivePage] = useState(parseHashRoute);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Application Data States
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authStatus, setAuthStatus] = useState("checking"); // "checking" | "authenticated" | "unauthenticated"
+
+  // Application Telemetry States
   const [summary, setSummary] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -49,6 +58,7 @@ export function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(5);
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
 
   // Theme State: 'light' (Huel White) by default, or 'dark'
   const [theme, setTheme] = useState(() => {
@@ -64,7 +74,7 @@ export function App() {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   };
 
-  // Sync route with browser hash for direct navigation & bookmarks
+  // Sync route with browser hash
   useEffect(() => {
     const handleHashChange = () => {
       setActivePage(parseHashRoute());
@@ -76,7 +86,9 @@ export function App() {
   const navigateTo = (page) => {
     setActivePage(page);
     let hashSlug = "dashboard";
-    if (page === "Real-time Monitor") hashSlug = "realtime";
+    if (page === "Login") hashSlug = "login";
+    else if (page === "Register") hashSlug = "register";
+    else if (page === "Real-time Monitor") hashSlug = "realtime";
     else if (page === "AI Analysis") hashSlug = "ai";
     else if (page === "Privacy") hashSlug = "privacy";
     else if (page === "Terms") hashSlug = "terms";
@@ -84,8 +96,56 @@ export function App() {
     window.location.hash = `/${hashSlug}`;
   };
 
-  // Fetch all live data from backend
+  // Verify existing cryptographic session on startup
+  useEffect(() => {
+    let isMounted = true;
+
+    api.onUnauthorized(() => {
+      if (isMounted) {
+        setCurrentUser(null);
+        setAuthStatus("unauthenticated");
+      }
+    });
+
+    const verifySession = async () => {
+      const token = api.getToken();
+      if (!token) {
+        if (isMounted) setAuthStatus("unauthenticated");
+        return;
+      }
+
+      try {
+        const res = await api.getCurrentUser();
+        if (isMounted) {
+          if (res.ok && res.data && res.data.user) {
+            setCurrentUser(res.data.user);
+            setAuthStatus("authenticated");
+          } else {
+            api.clearToken();
+            setCurrentUser(null);
+            setAuthStatus("unauthenticated");
+          }
+        }
+      } catch {
+        if (isMounted) {
+          api.clearToken();
+          setCurrentUser(null);
+          setAuthStatus("unauthenticated");
+        }
+      }
+    };
+
+    verifySession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Fetch all live data from backend (authenticated only)
   const fetchAllData = useCallback(async () => {
+    if (!api.getToken()) return;
+
     setIsLoading(true);
     try {
       const [
@@ -137,20 +197,42 @@ export function App() {
     }
   }, []);
 
-  // Initial load
+  // Trigger telemetry fetch when user becomes authenticated
   useEffect(() => {
-    fetchAllData();
-  }, [fetchAllData]);
+    if (authStatus === "authenticated") {
+      fetchAllData();
+    }
+  }, [authStatus, fetchAllData]);
 
-  // Automated polling loop with interval
+  // Automated polling loop with interval when authenticated
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (authStatus !== "authenticated" || !autoRefresh) return;
     const intervalMs = Math.max(2, refreshInterval) * 1000;
     const timer = setInterval(() => {
       fetchAllData();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [autoRefresh, refreshInterval, fetchAllData]);
+  }, [authStatus, autoRefresh, refreshInterval, fetchAllData]);
+
+  // Authentication Handlers
+  const handleLoginSuccess = (user) => {
+    setCurrentUser(user);
+    setAuthStatus("authenticated");
+    if (activePage === "Login" || activePage === "Register") {
+      navigateTo("Dashboard");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      api.clearToken();
+    }
+    setCurrentUser(null);
+    setAuthStatus("unauthenticated");
+    navigateTo("Login");
+  };
 
   // Alert Actions
   const handleAcknowledgeAlert = async (alertId) => {
@@ -206,7 +288,7 @@ export function App() {
     }
   };
 
-  // Force AI Inference
+  // AI inference trigger
   const handleTriggerInference = async () => {
     setIsAiProcessing(true);
     try {
@@ -219,26 +301,88 @@ export function App() {
     }
   };
 
-  // Count active unread alerts for sidebar badge
+  // Loading Session Screen
+  if (authStatus === "checking") {
+    return (
+      <div className="auth-splash-container" data-theme={theme}>
+        <div className="auth-splash-card">
+          <div className="splash-logo" aria-hidden="true">
+            <Shield size={36} />
+          </div>
+          <h2 className="splash-title">NetGuard AI</h2>
+          <p className="splash-subtitle">Verifying cryptographic session...</p>
+          <div className="splash-progress-bar" role="progressbar" aria-label="Loading session">
+            <div className="splash-progress-fill" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthenticated Flow
+  if (authStatus === "unauthenticated") {
+    // Allow unauthenticated users to inspect legal policies
+    if (activePage === "Privacy" || activePage === "Terms") {
+      return (
+        <div className="auth-page-container" data-theme={theme}>
+          <div className="auth-topbar">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => navigateTo("Login")}
+            >
+              <ArrowLeft size={16} />
+              <span>Return to Sign In</span>
+            </button>
+            <div className="auth-topbar-actions">
+              <button
+                type="button"
+                className="btn-theme-toggle"
+                onClick={toggleTheme}
+                aria-label={`Switch to ${theme === "light" ? "Dark Ops" : "Huel White"} theme`}
+              >
+                {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
+                <span className="btn-theme-label">{theme === "light" ? "Dark Mode" : "Huel White"}</span>
+              </button>
+            </div>
+          </div>
+          <div style={{ maxWidth: "960px", margin: "32px auto", padding: "0 24px" }}>
+            {activePage === "Privacy" ? <PrivacyPolicyPage /> : <TermsPage />}
+          </div>
+        </div>
+      );
+    }
+
+    if (activePage === "Register") {
+      return (
+        <RegisterPage
+          onRegisterSuccess={handleLoginSuccess}
+          onNavigateLogin={() => navigateTo("Login")}
+          onNavigateTerms={() => navigateTo("Terms")}
+          onNavigatePrivacy={() => navigateTo("Privacy")}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+      );
+    }
+
+    return (
+      <LoginPage
+        onLoginSuccess={handleLoginSuccess}
+        onNavigateRegister={() => navigateTo("Register")}
+        onNavigateTerms={() => navigateTo("Terms")}
+        onNavigatePrivacy={() => navigateTo("Privacy")}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
+  }
+
+  // Authenticated Console Flow
   const unreadAlertsCount = alerts.filter((a) => !a.acknowledged && !a.resolved).length;
 
   const renderActivePage = () => {
     switch (activePage) {
-      case "Dashboard":
-        return (
-          <DashboardPage
-            summary={summary}
-            metrics={metrics}
-            alerts={alerts}
-            history={history}
-            backendOnline={backendOnline}
-            isLoading={isLoading}
-            lastUpdated={lastUpdated}
-            onNavigate={navigateTo}
-            onAcknowledgeAlert={handleAcknowledgeAlert}
-            onResolveAlert={handleResolveAlert}
-          />
-        );
       case "Real-time Monitor":
         return (
           <RealtimeMonitorPage
@@ -246,7 +390,6 @@ export function App() {
             history={history}
             backendOnline={backendOnline}
             isLoading={isLoading}
-            lastUpdated={lastUpdated}
             onRefresh={fetchAllData}
           />
         );
@@ -319,12 +462,16 @@ export function App() {
             metrics={metrics}
             alerts={alerts}
             history={history}
+            devices={devices}
+            aiStatus={aiStatus}
+            dbBackend={dbBackend}
             backendOnline={backendOnline}
             isLoading={isLoading}
             lastUpdated={lastUpdated}
             onNavigate={navigateTo}
             onAcknowledgeAlert={handleAcknowledgeAlert}
             onResolveAlert={handleResolveAlert}
+            onPingDevice={handlePingDevice}
           />
         );
     }
@@ -337,6 +484,8 @@ export function App() {
         onNavigate={navigateTo}
         isOpen={sidebarOpen}
         unreadAlertsCount={unreadAlertsCount}
+        user={currentUser}
+        onLogout={handleLogout}
       />
 
       <div className="app-main-viewport">
@@ -350,6 +499,8 @@ export function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onRefresh={fetchAllData}
+          user={currentUser}
+          onLogout={handleLogout}
         />
 
         <main className="app-page-outlet">

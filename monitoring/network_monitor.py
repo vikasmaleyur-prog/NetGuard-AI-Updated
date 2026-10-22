@@ -1,16 +1,18 @@
 """
 NetGuard AI - Network Traffic Monitor
 Collects network I/O counters and calculates real-time throughput rates.
+Handles counter resets, interface changes, and permission errors gracefully.
 """
 
 import time
+from typing import Any, Dict, List
 import psutil
 
 _last_sample_time = None
 _last_counters = None
 
 
-def get_active_interfaces():
+def get_active_interfaces() -> List[Dict[str, Any]]:
     """Retrieve list of active network interfaces with IP addresses and status."""
     results = []
     try:
@@ -37,32 +39,66 @@ def get_active_interfaces():
     return results[:8]
 
 
-def get_network_metrics():
+def get_network_metrics() -> Dict[str, Any]:
     """
     Collect network metrics including cumulative counters, throughput rates, and interfaces.
+    Detects counter resets and handles unavailable interfaces.
     """
     global _last_sample_time, _last_counters
 
-    network = psutil.net_io_counters()
+    try:
+        network = psutil.net_io_counters()
+    except Exception as err:
+        return {
+            "bytes_sent": 0,
+            "bytes_received": 0,
+            "packets_sent": 0,
+            "packets_received": 0,
+            "errors_in": 0,
+            "errors_out": 0,
+            "drops_in": 0,
+            "drops_out": 0,
+            "bytes_sent_per_sec": 0.0,
+            "bytes_recv_per_sec": 0.0,
+            "packets_sent_per_sec": 0.0,
+            "packets_recv_per_sec": 0.0,
+            "interfaces": [],
+            "error": f"Failed to read network counters: {err}",
+        }
+
     curr_time = time.time()
 
     bytes_sent_rate = 0.0
     bytes_recv_rate = 0.0
     packets_sent_rate = 0.0
     packets_recv_rate = 0.0
+    counter_reset = False
 
     if _last_sample_time is not None and _last_counters is not None:
         delta_time = curr_time - _last_sample_time
         if delta_time > 0:
-            delta_sent = max(0, network.bytes_sent - _last_counters.bytes_sent)
-            delta_recv = max(0, network.bytes_recv - _last_counters.bytes_recv)
-            delta_psent = max(0, network.packets_sent - _last_counters.packets_sent)
-            delta_precv = max(0, network.packets_recv - _last_counters.packets_recv)
+            # Check for counter reset / system reboot
+            if (
+                network.bytes_sent < _last_counters.bytes_sent
+                or network.bytes_recv < _last_counters.bytes_recv
+                or network.packets_sent < _last_counters.packets_sent
+                or network.packets_recv < _last_counters.packets_recv
+            ):
+                counter_reset = True
+                bytes_sent_rate = 0.0
+                bytes_recv_rate = 0.0
+                packets_sent_rate = 0.0
+                packets_recv_rate = 0.0
+            else:
+                delta_sent = network.bytes_sent - _last_counters.bytes_sent
+                delta_recv = network.bytes_recv - _last_counters.bytes_recv
+                delta_psent = network.packets_sent - _last_counters.packets_sent
+                delta_precv = network.packets_recv - _last_counters.packets_recv
 
-            bytes_sent_rate = round(delta_sent / delta_time, 2)
-            bytes_recv_rate = round(delta_recv / delta_time, 2)
-            packets_sent_rate = round(delta_psent / delta_time, 2)
-            packets_recv_rate = round(delta_precv / delta_time, 2)
+                bytes_sent_rate = round(delta_sent / delta_time, 2)
+                bytes_recv_rate = round(delta_recv / delta_time, 2)
+                packets_sent_rate = round(delta_psent / delta_time, 2)
+                packets_recv_rate = round(delta_precv / delta_time, 2)
 
     _last_sample_time = curr_time
     _last_counters = network
@@ -80,6 +116,7 @@ def get_network_metrics():
         "bytes_recv_per_sec": bytes_recv_rate,
         "packets_sent_per_sec": packets_sent_rate,
         "packets_recv_per_sec": packets_recv_rate,
+        "counter_reset": counter_reset,
         "interfaces": get_active_interfaces(),
     }
 
@@ -88,8 +125,8 @@ if __name__ == "__main__":
     metrics = get_network_metrics()
     print("NetGuard AI - Network Metrics")
     print("-----------------------------")
-    print(f"Bytes Sent: {metrics['bytes_sent']}")
-    print(f"Bytes Received: {metrics['bytes_received']}")
+    print(f"Bytes Sent: {metrics['bytes_sent']} ({metrics['bytes_sent_per_sec']} B/s)")
+    print(f"Bytes Received: {metrics['bytes_received']} ({metrics['bytes_recv_per_sec']} B/s)")
     print(f"Packets Sent: {metrics['packets_sent']}")
     print(f"Packets Received: {metrics['packets_received']}")
     print(f"Errors In: {metrics['errors_in']}")

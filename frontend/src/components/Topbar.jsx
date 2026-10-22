@@ -1,5 +1,6 @@
 import React from "react";
-import { Menu, X, RefreshCw, Sun, Moon } from "lucide-react";
+import { Menu, X, RefreshCw, Sun, Moon, LogOut } from "lucide-react";
+import MagneticButton from "./MagneticButton";
 
 export function Topbar({
   activePage,
@@ -11,6 +12,8 @@ export function Topbar({
   theme = "light",
   onToggleTheme,
   onRefresh,
+  user = null,
+  onLogout = null,
 }) {
   const pageDescriptions = {
     "Dashboard": "Real-time network telemetry and automated anomaly assessment",
@@ -40,15 +43,15 @@ export function Topbar({
   return (
     <header className="app-topbar">
       <div className="topbar-left">
-        <button
+        <MagneticButton
           type="button"
           className="btn-icon sidebar-toggle-btn"
           onClick={onToggleSidebar}
-          aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+          ariaLabel={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
           title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
-        </button>
+        </MagneticButton>
 
         <div className="topbar-heading">
           <h2 className="topbar-title">{activePage}</h2>
@@ -60,29 +63,29 @@ export function Topbar({
 
       <div className="topbar-right">
         {onToggleTheme && (
-          <button
+          <MagneticButton
             type="button"
             className="btn-theme-toggle"
             onClick={onToggleTheme}
-            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            ariaLabel={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
             title={`Switch to ${theme === "light" ? "Dark Ops" : "Huel White"} theme`}
           >
             {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
             <span className="btn-theme-label">{theme === "light" ? "Dark Mode" : "Huel White"}</span>
-          </button>
+          </MagneticButton>
         )}
 
-        <button
+        <MagneticButton
           type="button"
           className="btn-refresh"
           onClick={onRefresh}
           disabled={isLoading}
-          aria-label="Refresh telemetry data"
+          ariaLabel="Refresh telemetry data"
           title="Refresh telemetry data"
         >
           <RefreshCw size={15} className={isLoading ? "refresh-spin" : ""} />
           <span className="btn-refresh-label">{isLoading ? "Polling..." : "Refresh"}</span>
-        </button>
+        </MagneticButton>
 
         <div
           className={`connection-status-pill ${
@@ -96,6 +99,24 @@ export function Topbar({
             {backendOnline ? `LIVE (${dbBackend.toUpperCase()})` : "BACKEND OFFLINE"}
           </span>
         </div>
+
+        {user && (
+          <div className="topbar-user-pill">
+            <span className="user-pill-role">{user.role === "admin" ? "ADMIN" : "OPERATOR"}</span>
+            <span className="user-pill-name">{user.full_name || user.email}</span>
+            {onLogout && (
+              <button
+                type="button"
+                className="btn-icon topbar-logout-btn"
+                onClick={onLogout}
+                aria-label="Sign out"
+                title="Sign out of console"
+              >
+                <LogOut size={13} />
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="topbar-clock">
           <span className="clock-date">{currentDate}</span>

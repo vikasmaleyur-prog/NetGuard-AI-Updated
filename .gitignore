@@ -21,6 +21,9 @@ dist/
 # Machine Learning
 *.pkl
 *.joblib
+!ai/models/*.joblib
+!ai/models/*.json
+
 
 # Node
 node_modules/
@@ -40,3 +43,31 @@ dist/
 
 # Logs
 *.log
+.env
+.env.*
+!.env.example
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Local secrets and generated files
+.env
+.env.*
+!.env.example
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local databases
+database/*.db
+database/*.sqlite
+database/*.sqlite3

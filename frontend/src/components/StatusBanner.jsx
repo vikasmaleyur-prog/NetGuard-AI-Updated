@@ -1,6 +1,7 @@
 import React from "react";
 import { ShieldCheck, AlertTriangle, AlertOctagon, HelpCircle } from "lucide-react";
 import Badge from "./Badge";
+import useTilt from "../hooks/useTilt";
 
 export function StatusBanner({
   networkStatus = "INSUFFICIENT DATA",
@@ -14,6 +15,8 @@ export function StatusBanner({
   const isNormal = normStatus === "NORMAL";
   const isWarning = normStatus === "WARNING";
   const isCritical = normStatus === "CRITICAL";
+
+  const bannerRef = useTilt({ maxTilt: 2.5, perspective: 1200, scale: 1.006, glow: true });
 
   let bannerClass = "banner-insufficient";
   let Icon = HelpCircle;
@@ -38,16 +41,26 @@ export function StatusBanner({
   }
 
   return (
-    <section className={`status-hero-banner ${bannerClass}`}>
+    <section
+      ref={bannerRef}
+      className={`status-hero-banner interactive-card ${bannerClass}`}
+    >
+      {/* Background Architectural Grid Lines */}
+      <div className="status-grid-overlay" aria-hidden="true" />
+      <div className="card-spotlight-layer" aria-hidden="true" />
+
       <div className="status-hero-main">
         <div className="status-kicker-row">
-          <span className="status-kicker">NETWORK OPERATIONS STATUS</span>
+          <div className="status-kicker-beacon">
+            <span className="beacon-ping" />
+            <span className="status-kicker">NETWORK OPERATIONS STATUS</span>
+          </div>
           <Badge status={backendOnline ? normStatus : "OFFLINE"} />
         </div>
 
         <div className="status-headline">
           <div className="status-icon-wrap" aria-hidden="true">
-            <Icon size={28} />
+            <Icon size={30} />
           </div>
           <div>
             <h2 className="status-title">{backendOnline ? normStatus : "BACKEND DISCONNECTED"}</h2>

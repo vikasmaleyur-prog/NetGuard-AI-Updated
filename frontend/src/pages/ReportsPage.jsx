@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Download, Calendar, Activity, AlertTriangle, RefreshCw } from "lucide-react";
 import MetricCard from "../components/MetricCard";
 import EmptyState from "../components/EmptyState";
+import MagneticButton from "../components/MagneticButton";
+import ScrollReveal from "../components/ScrollReveal";
 import api from "../api/client";
 
 export function ReportsPage({ backendOnline }) {
@@ -56,68 +58,71 @@ export function ReportsPage({ backendOnline }) {
   return (
     <div className="page-container reports-page">
       {/* 1. REPORT HEADER & PERIOD SELECTOR */}
-      <div className="panel report-controls-panel">
-        <div className="panel-header">
-          <div>
-            <h3 className="panel-title">Telemetry Audit & Reporting</h3>
-            <span className="panel-subtitle">Aggregated performance and security metrics from persistent storage</span>
-          </div>
+      <ScrollReveal direction="fade" delay={0}>
+        <div className="panel report-controls-panel">
+          <div className="panel-header">
+            <div>
+              <h3 className="panel-title">Telemetry Audit & Reporting</h3>
+              <span className="panel-subtitle">Aggregated performance and security metrics from persistent storage</span>
+            </div>
 
-          <div className="report-actions-row">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleExportCSV}
-              disabled={isExporting || !backendOnline || summaryData?.total_telemetry_samples === 0}
-            >
-              <Download size={14} className={isExporting ? "refresh-spin" : ""} />
-              {isExporting ? "Generating CSV..." : "Export Full CSV Report"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => fetchReport(period)}
-              disabled={isLoading}
-            >
-              <RefreshCw size={14} className={isLoading ? "refresh-spin" : ""} />
-              Recalculate
-            </button>
-          </div>
-        </div>
-
-        <div className="report-period-selector-row">
-          <span className="period-label">
-            <Calendar size={14} />
-            Reporting Window:
-          </span>
-
-          <div className="filter-button-group">
-            {[
-              { id: "1h", label: "Past 1 Hour" },
-              { id: "6h", label: "Past 6 Hours" },
-              { id: "24h", label: "Past 24 Hours" },
-              { id: "7d", label: "Past 7 Days" },
-              { id: "all", label: "All Historical" },
-            ].map((p) => (
-              <button
-                key={p.id}
+            <div className="report-actions-row">
+              <MagneticButton
                 type="button"
-                className={`btn-filter ${period === p.id ? "active" : ""}`}
-                onClick={() => setPeriod(p.id)}
+                className="btn btn-primary btn-sm"
+                onClick={handleExportCSV}
+                disabled={isExporting || !backendOnline || summaryData?.total_telemetry_samples === 0}
               >
-                {p.label}
-              </button>
-            ))}
+                <Download size={14} className={isExporting ? "refresh-spin" : ""} />
+                {isExporting ? "Generating CSV..." : "Export Full CSV Report"}
+              </MagneticButton>
+              <MagneticButton
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => fetchReport(period)}
+                disabled={isLoading}
+              >
+                <RefreshCw size={14} className={isLoading ? "refresh-spin" : ""} />
+                Recalculate
+              </MagneticButton>
+            </div>
           </div>
 
-          <span className="report-gen-time">
-            Generated: {summaryData?.generated_at ? new Date(summaryData.generated_at).toLocaleString() : "--"}
-          </span>
+          <div className="report-period-selector-row">
+            <span className="period-label">
+              <Calendar size={14} />
+              Reporting Window:
+            </span>
+
+            <div className="filter-button-group">
+              {[
+                { id: "1h", label: "Past 1 Hour" },
+                { id: "6h", label: "Past 6 Hours" },
+                { id: "24h", label: "Past 24 Hours" },
+                { id: "7d", label: "Past 7 Days" },
+                { id: "all", label: "All Historical" },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`btn-filter ${period === p.id ? "active" : ""}`}
+                  onClick={() => setPeriod(p.id)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <span className="report-gen-time">
+              Generated: {summaryData?.generated_at ? new Date(summaryData.generated_at).toLocaleString() : "--"}
+            </span>
+          </div>
         </div>
-      </div>
+      </ScrollReveal>
 
       {/* 2. AGGREGATED METRICS */}
-      <div className="metrics-grid" style={{ marginTop: "20px" }}>
+      <ScrollReveal direction="up" delay={80}>
+        <div className="metrics-grid" style={{ marginTop: "20px" }}>
         <MetricCard
           icon={<Activity size={20} />}
           title="Average CPU Load"
@@ -217,7 +222,8 @@ export function ReportsPage({ backendOnline }) {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      </ScrollReveal>
     </div>
   );
 }

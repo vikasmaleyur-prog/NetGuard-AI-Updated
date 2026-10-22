@@ -18,11 +18,20 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from ai.service import run_full_inference
+from backend.auth import (
+    create_access_token,
+    get_current_user,
+    get_optional_current_user,
+    hash_password,
+    validate_email,
+    validate_password_strength,
+    verify_password,
+)
 from database.connection import (
     get_db_info,
     monitoring_collection,
@@ -32,6 +41,11 @@ from database.connection import (
 )
 from monitoring.collector import collect_metrics
 from monitoring.latency_monitor import get_latency
+from backend.recovery import (
+    ACTION_REGISTRY,
+    get_available_actions,
+    run_recovery_lifecycle,
+)
 
 from contextlib import asynccontextmanager
 
@@ -41,12 +55,13 @@ from contextlib import asynccontextmanager
 
 _collector_running = False
 _collector_thread = None
+_collector_stop_event = threading.Event()
 _last_collection_time: Optional[str] = None
 
 
 def _background_collector_loop():
     global _collector_running, _last_collection_time
-    while _collector_running:
+    while _collector_running and not _collector_stop_event.is_set():
         try:
             settings = storage_manager.get_settings()
             if settings.get("active_collector", True):
@@ -64,14 +79,14 @@ def _background_collector_loop():
                 mem_warn = settings.get("memory_warning_threshold", 85.0)
                 lat_warn = settings.get("latency_warning_threshold", 100.0)
 
-                if cpu >= cpu_crit:
+                if cpu is not None and cpu >= cpu_crit:
                     storage_manager.add_alert(
                         "CRITICAL",
                         "CPU Utilization Critical",
                         f"Host CPU reached {cpu:.1f}% (threshold {cpu_crit:.1f}%)",
                         source="Threshold Monitor",
                     )
-                elif cpu >= cpu_warn:
+                elif cpu is not None and cpu >= cpu_warn:
                     storage_manager.add_alert(
                         "WARNING",
                         "High CPU Utilization",
@@ -79,7 +94,7 @@ def _background_collector_loop():
                         source="Threshold Monitor",
                     )
 
-                if mem >= mem_warn:
+                if mem is not None and mem >= mem_warn:
                     storage_manager.add_alert(
                         "WARNING",
                         "High Memory Consumption",
@@ -95,24 +110,40 @@ def _background_collector_loop():
                         source="Latency Monitor",
                     )
 
-                # Periodically trigger AI analysis (e.g., every cycle)
-                run_full_inference(metrics)
+                # Periodically trigger AI consensus analysis
+                ai_res = run_full_inference(metrics)
+                decision = ai_res.get("decision", {})
+
+                # Check self-healing recovery eligibility if in AUTOMATIC mode
+                rec_mode = settings.get("recovery_mode", "MANUAL")
+                if rec_mode == "AUTOMATIC" and decision.get("status") in ["CRITICAL", "WARNING"]:
+                    run_recovery_lifecycle(
+                        decision=decision,
+                        metrics=metrics,
+                        mode="AUTOMATIC",
+                        operator_email="system@netguard.ai",
+                    )
 
             interval = max(2, int(settings.get("refresh_interval", 5)))
-            time.sleep(interval)
+            _collector_stop_event.wait(timeout=interval)
         except Exception:
-            time.sleep(5)
+            _collector_stop_event.wait(timeout=5)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _collector_running, _collector_thread
+    global _collector_running, _collector_thread, _collector_stop_event
     _collector_running = True
-    _collector_thread = threading.Thread(target=_background_collector_loop, daemon=True)
-    _collector_thread.start()
+    _collector_stop_event.clear()
+    if _collector_thread is None or not _collector_thread.is_alive():
+        _collector_thread = threading.Thread(target=_background_collector_loop, daemon=True)
+        _collector_thread.start()
     storage_manager.add_log("INFO", "Server", "NetGuard AI backend started successfully")
     yield
     _collector_running = False
+    _collector_stop_event.set()
+    if _collector_thread and _collector_thread.is_alive():
+        _collector_thread.join(timeout=2.0)
     storage_manager.add_log("INFO", "Server", "NetGuard AI backend shutting down")
 
 
@@ -179,12 +210,234 @@ def health_check():
 
 
 # ============================================================
+# AUTHENTICATION & USER MANAGEMENT
+# ============================================================
+
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=100)
+    email: str = Field(..., min_length=5, max_length=254)
+    password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+    organization: Optional[str] = Field(None, max_length=100)
+    terms_accepted: bool = Field(...)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=254)
+    password: str = Field(..., min_length=1, max_length=128)
+    remember_me: bool = False
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=254)
+
+
+@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def register_user(req: RegisterRequest, response: Response):
+    email = req.email.strip().lower()
+    full_name = req.full_name.strip()
+    organization = req.organization.strip() if req.organization else None
+
+    if not req.terms_accepted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must accept the Terms of Service and Privacy Policy to proceed.",
+        )
+
+    if not validate_email(email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide a valid email address.",
+        )
+
+    if req.password != req.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match.",
+        )
+
+    valid, err_msg = validate_password_strength(req.password)
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=err_msg,
+        )
+
+    existing = storage_manager.get_user_by_email(email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email address already exists.",
+        )
+
+    hashed_pw = hash_password(req.password)
+    user = storage_manager.create_user(
+        email=email,
+        password_hash=hashed_pw,
+        full_name=full_name,
+        organization=organization,
+        role="operator",
+    )
+
+    token = create_access_token(user, remember_me=False)
+
+    response.set_cookie(
+        key="netguard_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=86400,
+    )
+
+    storage_manager.add_log(
+        "INFO",
+        "Authentication",
+        f"New operator registered: {email} ({organization or 'Independent'})",
+    )
+
+    return {
+        "status": "success",
+        "token": token,
+        "token_type": "bearer",
+        "user": user,
+    }
+
+
+@app.post("/auth/login")
+def login_user(req: LoginRequest, response: Response):
+    email = req.email.strip().lower()
+
+    if not email or not req.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email and password are required.",
+        )
+
+    if storage_manager.is_user_locked_out(email):
+        storage_manager.add_log(
+            "WARNING",
+            "Security",
+            f"Blocked login attempt on locked account: {email}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Account temporarily locked due to excessive failed attempts. Please try again later.",
+        )
+
+    user = storage_manager.get_user_by_email(email)
+    if not user or not verify_password(req.password, user.get("password_hash", "")):
+        storage_manager.record_failed_login(email)
+        storage_manager.add_log(
+            "WARNING",
+            "Authentication",
+            f"Failed login attempt for {email}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email address or password.",
+        )
+
+    storage_manager.update_user_login(user["id"])
+    token = create_access_token(user, remember_me=req.remember_me)
+
+    cookie_max_age = 7 * 86400 if req.remember_me else 86400
+    response.set_cookie(
+        key="netguard_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=cookie_max_age,
+    )
+
+    storage_manager.add_log(
+        "INFO",
+        "Authentication",
+        f"Operator signed in: {email} (role: {user.get('role', 'operator')})",
+    )
+
+    sanitized = {
+        "id": user["id"],
+        "email": user["email"],
+        "full_name": user.get("full_name", ""),
+        "organization": user.get("organization"),
+        "role": user.get("role", "operator"),
+        "created_at": user.get("created_at"),
+        "last_login_at": user.get("last_login_at"),
+    }
+
+    return {
+        "status": "success",
+        "token": token,
+        "token_type": "bearer",
+        "user": sanitized,
+    }
+
+
+@app.post("/auth/logout")
+def logout_user(
+    response: Response,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    jti = current_user.get("_current_jti")
+    exp = current_user.get("_current_exp")
+    if jti and exp:
+        storage_manager.revoke_token(jti, user_id=current_user["id"], expires_at=exp)
+
+    response.delete_cookie(key="netguard_token")
+
+    storage_manager.add_log(
+        "INFO",
+        "Authentication",
+        f"Operator logged out: {current_user.get('email')}",
+    )
+
+    return {
+        "status": "success",
+        "message": "Signed out successfully.",
+    }
+
+
+@app.get("/auth/me")
+def get_current_user_profile(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    sanitized = {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "full_name": current_user.get("full_name", ""),
+        "organization": current_user.get("organization"),
+        "role": current_user.get("role", "operator"),
+        "created_at": current_user.get("created_at"),
+        "last_login_at": current_user.get("last_login_at"),
+    }
+    return {
+        "status": "success",
+        "user": sanitized,
+    }
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(req: ForgotPasswordRequest):
+    email = req.email.strip().lower()
+    storage_manager.add_log(
+        "INFO",
+        "Authentication",
+        f"Password recovery requested for {email}",
+    )
+    return {
+        "status": "success",
+        "message": "If an account matches that email address, password reset instructions have been dispatched.",
+    }
+
+
+# ============================================================
 # METRICS & TELEMETRY
 # ============================================================
 
 
 @app.get("/metrics")
-def get_latest_metrics():
+def get_latest_metrics(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Return the most recent monitoring record from database."""
     latest = monitoring_collection.find_one({}, sort=[("_id", -1)])
     if not latest:
@@ -201,7 +454,7 @@ def get_latest_metrics():
 
 
 @app.post("/metrics/collect")
-def trigger_collect():
+def trigger_collect(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Trigger an immediate live telemetry collection cycle."""
     metrics = collect_metrics()
     doc_id = save_metrics(metrics)
@@ -215,7 +468,10 @@ def trigger_collect():
 
 
 @app.get("/metrics/history")
-def get_metrics_history(limit: int = Query(20, ge=1, le=200)):
+def get_metrics_history(
+    limit: int = Query(20, ge=1, le=200),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Return recent chronological monitoring records."""
     cursor = monitoring_collection.find({})
     cursor.sort("_id", -1)
@@ -237,7 +493,7 @@ def get_metrics_history(limit: int = Query(20, ge=1, le=200)):
 
 
 @app.get("/ai/status")
-def get_ai_status():
+def get_ai_status(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Return latest AI model analysis status and telemetry interpretations."""
     # Always evaluate active state or latest inference
     latest = monitoring_collection.find_one(
@@ -288,7 +544,7 @@ def get_ai_status():
 
 
 @app.post("/ai/run-inference")
-def trigger_ai_inference():
+def trigger_ai_inference(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Force run AI anomaly detection and ensemble scoring."""
     latest = monitoring_collection.find_one({}, sort=[("_id", -1)])
     metrics = latest.get("metrics", {}) if latest else None
@@ -297,7 +553,7 @@ def trigger_ai_inference():
 
 
 @app.get("/decision")
-def get_latest_decision():
+def get_latest_decision(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Return the latest NetGuard AI ensemble decision and recommendation."""
     latest = monitoring_collection.find_one(
         {"decision": {"$exists": True}},
@@ -344,6 +600,7 @@ def get_alerts(
     limit: int = Query(50, ge=1, le=200),
     severity: Optional[str] = None,
     include_resolved: bool = True,
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Retrieve verified alerts from persistent database."""
     alerts = storage_manager.get_alerts(
@@ -357,7 +614,10 @@ def get_alerts(
 
 
 @app.post("/alerts/{alert_id}/acknowledge")
-def acknowledge_alert(alert_id: str):
+def acknowledge_alert(
+    alert_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     success = storage_manager.acknowledge_alert(alert_id)
     if not success:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -365,7 +625,10 @@ def acknowledge_alert(alert_id: str):
 
 
 @app.post("/alerts/{alert_id}/resolve")
-def resolve_alert(alert_id: str):
+def resolve_alert(
+    alert_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     success = storage_manager.resolve_alert(alert_id)
     if not success:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -373,7 +636,10 @@ def resolve_alert(alert_id: str):
 
 
 @app.post("/alerts/create")
-def create_custom_alert(req: AlertCreateRequest):
+def create_custom_alert(
+    req: AlertCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     if req.severity.upper() not in ["CRITICAL", "WARNING", "INFO"]:
         raise HTTPException(
             status_code=400, detail="Severity must be CRITICAL, WARNING, or INFO"
@@ -403,6 +669,7 @@ def get_logs(
     limit: int = Query(100, ge=1, le=500),
     level: Optional[str] = None,
     source: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Retrieve operational and security log entries."""
     logs = storage_manager.get_logs(limit=limit, level=level, source=source)
@@ -413,7 +680,10 @@ def get_logs(
 
 
 @app.post("/logs")
-def add_log_entry(req: LogCreateRequest):
+def add_log_entry(
+    req: LogCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     log_id = storage_manager.add_log(
         level=req.level, source=req.source, message=req.message
     )
@@ -432,7 +702,7 @@ class DeviceRegisterRequest(BaseModel):
 
 
 @app.get("/devices")
-def get_monitored_devices():
+def get_monitored_devices(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Return monitored device inventory."""
     devices = storage_manager.get_devices()
     return {
@@ -442,7 +712,10 @@ def get_monitored_devices():
 
 
 @app.post("/devices")
-def register_device(req: DeviceRegisterRequest):
+def register_device(
+    req: DeviceRegisterRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     dev_id = storage_manager.register_device(
         name=req.name, ip=req.ip, role=req.role
     )
@@ -450,7 +723,10 @@ def register_device(req: DeviceRegisterRequest):
 
 
 @app.post("/devices/{device_id}/ping")
-def ping_monitored_device(device_id: str):
+def ping_monitored_device(
+    device_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Test round-trip latency to a specific registered device."""
     devices = storage_manager.get_devices()
     target = next((d for d in devices if d["id"] == device_id), None)
@@ -470,7 +746,10 @@ def ping_monitored_device(device_id: str):
 
 
 @app.delete("/devices/{device_id}")
-def delete_device(device_id: str):
+def delete_device(
+    device_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     success = storage_manager.delete_device(device_id)
     if not success:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -483,7 +762,10 @@ def delete_device(device_id: str):
 
 
 @app.get("/reports/summary")
-def get_report_summary(period: str = Query("24h", pattern="^(1h|6h|24h|7d|all)$")):
+def get_report_summary(
+    period: str = Query("24h", pattern="^(1h|6h|24h|7d|all)$"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Calculate verified summary analytics from stored telemetry over the requested period."""
     hours_map = {"1h": 1, "6h": 6, "24h": 24, "7d": 168, "all": 999999}
     hours = hours_map.get(period, 24)
@@ -563,7 +845,10 @@ def get_report_summary(period: str = Query("24h", pattern="^(1h|6h|24h|7d|all)$"
 
 
 @app.get("/reports/export")
-def export_report_csv(period: str = Query("24h")):
+def export_report_csv(
+    period: str = Query("24h"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Export actual stored telemetry as a downloadable CSV file."""
     cursor = monitoring_collection.find({})
     cursor.sort("_id", -1)
@@ -626,15 +911,20 @@ class SettingsUpdateRequest(BaseModel):
     memory_warning_threshold: Optional[float] = Field(None, ge=1.0, le=100.0)
     latency_warning_threshold: Optional[float] = Field(None, ge=1.0, le=5000.0)
     active_collector: Optional[bool] = None
+    recovery_mode: Optional[str] = Field(None, pattern="^(MANUAL|AUTOMATIC|DRY_RUN)$")
+    recovery_cooldown_seconds: Optional[int] = Field(None, ge=10, le=3600)
 
 
 @app.get("/settings")
-def get_settings():
+def get_settings(current_user: Dict[str, Any] = Depends(get_current_user)):
     return storage_manager.get_settings()
 
 
 @app.post("/settings")
-def update_settings(req: SettingsUpdateRequest):
+def update_settings(
+    req: SettingsUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No settings provided to update")
@@ -654,12 +944,150 @@ def update_settings(req: SettingsUpdateRequest):
 
 
 # ============================================================
+# SELF-HEALING & RECOVERY ENDPOINTS
+# ============================================================
+
+
+class RecoveryTriggerRequest(BaseModel):
+    action_key: str
+    mode: Optional[str] = Field("DRY_RUN", pattern="^(DRY_RUN|MANUAL|AUTOMATIC)$")
+
+
+@app.get("/recovery/actions")
+def get_recovery_actions_list(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Return all registered self-healing actions and execution capabilities."""
+    return {
+        "status": "success",
+        "actions": get_available_actions(),
+    }
+
+
+@app.get("/recovery/history")
+def get_recovery_history(
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Retrieve audit history of automated and manual recovery attempts."""
+    actions = storage_manager.get_recovery_actions(limit=limit, status=status)
+    return {
+        "count": len(actions),
+        "actions": actions,
+    }
+
+
+@app.get("/recovery/status")
+def get_recovery_status(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Return current recovery engine state, configured mode, and statistics."""
+    settings = storage_manager.get_settings()
+    actions = storage_manager.get_recovery_actions(limit=100)
+
+    total = len(actions)
+    verified = sum(1 for a in actions if a["status"] == "VERIFIED")
+    pending = sum(1 for a in actions if a["status"] == "PENDING_APPROVAL")
+    dry_runs = sum(1 for a in actions if a["status"] == "DRY_RUN")
+    failed = sum(1 for a in actions if a["status"] == "FAILED")
+
+    return {
+        "configured_mode": settings.get("recovery_mode", "MANUAL"),
+        "cooldown_seconds": float(settings.get("recovery_cooldown_seconds", 300)),
+        "statistics": {
+            "total_actions": total,
+            "verified": verified,
+            "pending_approval": pending,
+            "dry_runs": dry_runs,
+            "failed": failed,
+        },
+        "latest_action": actions[0] if actions else None,
+    }
+
+
+@app.post("/recovery/trigger")
+def trigger_recovery_action(
+    req: RecoveryTriggerRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Manually execute or dry-run a specific recovery action."""
+    if req.action_key not in ACTION_REGISTRY:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown recovery action: {req.action_key}"
+        )
+
+    latest_metric_doc = monitoring_collection.find_one({}, sort=[("_id", -1)])
+    metrics = latest_metric_doc.get("metrics", {}) if latest_metric_doc else {}
+    latest_decision_doc = monitoring_collection.find_one(
+        {"decision": {"$exists": True}}, sort=[("_id", -1)]
+    )
+    decision = latest_decision_doc.get("decision", {}) if latest_decision_doc else {}
+
+    operator = current_user.get("email", "operator@netguard.ai")
+    res = run_recovery_lifecycle(
+        decision=decision,
+        metrics=metrics,
+        force_action_key=req.action_key,
+        mode=req.mode,
+        operator_email=operator,
+    )
+    return res
+
+
+@app.post("/recovery/approve/{action_id}")
+def approve_recovery_action(
+    action_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Approve and execute a pending recovery action with verification."""
+    action = storage_manager.get_recovery_action_by_id(action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Recovery action not found")
+
+    if action["status"] != "PENDING_APPROVAL":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Action is in '{action['status']}' state; only PENDING_APPROVAL actions can be approved.",
+        )
+
+    action_key = action["action_key"]
+    if action_key not in ACTION_REGISTRY:
+        raise HTTPException(
+            status_code=500, detail="Action implementation not registered"
+        )
+
+    latest_metric_doc = monitoring_collection.find_one({}, sort=[("_id", -1)])
+    metrics = latest_metric_doc.get("metrics", {}) if latest_metric_doc else {}
+    latest_decision_doc = monitoring_collection.find_one(
+        {"decision": {"$exists": True}}, sort=[("_id", -1)]
+    )
+    decision = latest_decision_doc.get("decision", {}) if latest_decision_doc else {}
+
+    operator = current_user.get("email", "operator@netguard.ai")
+    res = run_recovery_lifecycle(
+        decision=decision,
+        metrics=metrics,
+        force_action_key=action_key,
+        mode="MANUAL",
+        operator_email=operator,
+    )
+
+    # Mark original pending record as superseded
+    storage_manager.update_recovery_action(
+        action_id,
+        {
+            "status": "EXECUTED",
+            "logs": action.get("logs", [])
+            + [f"Approved and executed as {res.get('action_id')}"],
+        },
+    )
+    return res
+
+
+# ============================================================
 # SYSTEM SUMMARY (BACKWARD COMPATIBILITY + HONEST DATA)
 # ============================================================
 
 
 @app.get("/summary")
-def summary():
+def summary(current_user: Dict[str, Any] = Depends(get_current_user)):
     """Return an overall NetGuard AI summary grounded strictly in real metrics."""
     latest = monitoring_collection.find_one({}, sort=[("_id", -1)])
     if not latest:
